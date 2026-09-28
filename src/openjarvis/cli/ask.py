@@ -419,7 +419,7 @@ def _run_agent(
                 capability_policy=capability_policy,
                 agent_id=getattr(agent_cls, "agent_id", agent_name),
                 interactive=True,
-                confirm_callback=lambda prompt: True,
+                confirm_callback=None,  # fail closed: no synchronous confirmation channel exists here
             )
             skill_manager = SkillManager(
                 bus,

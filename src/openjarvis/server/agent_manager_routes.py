@@ -1027,7 +1027,7 @@ async def _stream_managed_agent(
                     max_turns=int(config.get("max_turns", 8)),
                     temperature=float(config.get("temperature", 0.3)),
                     interactive=True,
-                    confirm_callback=lambda _prompt: True,
+                    confirm_callback=None,  # fail closed: no synchronous confirmation channel exists here
                 )
                 if resolved_toolkit.mcp_clients:
                     dr_agent._mcp_clients = resolved_toolkit.mcp_clients
@@ -1316,7 +1316,7 @@ async def _stream_managed_agent(
         tools=resolved_toolkit.instances,
         bus=bus,
         interactive=True,
-        confirm_callback=lambda _prompt: True,
+        confirm_callback=None,  # fail closed: no synchronous confirmation channel exists here
         capability_policy=getattr(app_state, "capability_policy", None),
         rate_limiter=getattr(app_state, "rate_limiter", None),
         agent_id=agent_id,
@@ -1887,7 +1887,7 @@ def create_agent_manager_router(
                                     ),
                                     agent_id=agent_id,
                                     interactive=True,
-                                    confirm_callback=lambda _prompt: True,
+                                    confirm_callback=None,  # fail closed: no synchronous confirmation channel exists here
                                 )
 
                                 def handler(text: str) -> str:
@@ -1970,7 +1970,7 @@ def create_agent_manager_router(
                                     ),
                                     agent_id=agent_id,
                                     interactive=True,
-                                    confirm_callback=lambda _prompt: True,
+                                    confirm_callback=None,  # fail closed: no synchronous confirmation channel exists here
                                 )
                         bus = getattr(request.app.state, "bus", None)
                         if bus is None:
