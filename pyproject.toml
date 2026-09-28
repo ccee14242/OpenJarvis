@@ -107,6 +107,12 @@ voice = [
     "soundfile>=0.12",
     "sounddevice>=0.5",  # play_wav / record_until_silence in speech/voice_io.py
     "numpy>=1.24",
+    # Wake-word detection for jarvis listen. tflite-runtime (openwakeword's
+    # other declared backend) is excluded below via exclude-dependencies: it
+    # has no wheels for Python 3.12+ on any platform, and is unused here
+    # anyway since OpenWakeWordBackend always requests inference_framework="onnx".
+    "openwakeword>=0.6",
+    "onnxruntime>=1.16",
 ]
 openhands = ["openhands-sdk>=1.0; python_version >= '3.12'"]
 # Apple Foundation Models (on-device AFM 3). Needs an Apple Silicon Mac on
@@ -305,3 +311,6 @@ dev = [
 desktop-native = [
     "openjarvis-rust",
 ]
+
+[tool.uv]
+exclude-dependencies = ["tflite-runtime"]
