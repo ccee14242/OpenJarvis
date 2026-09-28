@@ -78,7 +78,11 @@ class NativeOpenHandsAgent(ToolUsingAgent):
         capability_policy: Optional[Any] = None,
         agent_id: Optional[str] = None,
         rate_limiter: Optional[Any] = None,
+        prompt_builder: Optional[Any] = None,
     ) -> None:
+        # Kept apart from BaseAgent.prompt_builder on purpose: that one
+        # replaces the agent's own system prompt; this one only appends persona.
+        self._persona_builder = prompt_builder
         super().__init__(
             engine,
             model,
@@ -247,6 +251,10 @@ class NativeOpenHandsAgent(ToolUsingAgent):
         system_prompt = prompt_template.format(
             tool_descriptions=tool_descriptions,
         )
+        if self._persona_builder is not None:
+            persona = self._persona_builder.persona_sections()
+            if persona:
+                system_prompt = f"{system_prompt}\n\n{persona}"
 
         # Pre-fetch any URLs in the input so the LLM gets the content directly
         input, url_expanded = self._expand_urls(input)
