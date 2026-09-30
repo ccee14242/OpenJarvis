@@ -241,6 +241,7 @@ DEFAULT_TOOL_CAPABILITIES: Dict[str, List[str]] = {
     "file_read": [Capability.FILE_READ],
     "file_write": [Capability.FILE_WRITE],
     "get_pending_actions": [Capability.MEMORY_READ],
+    "get_current_time": [],
     "get_weather": [Capability.NETWORK_FETCH],
     "git_commit": [Capability.FILE_WRITE],
     "git_diff": [Capability.FILE_READ],
@@ -280,6 +281,7 @@ DEFAULT_TOOL_CAPABILITIES: Dict[str, List[str]] = {
 
 _SAFE_BUILTIN_PROVENANCE = {
     "calculator": ("openjarvis.tools.calculator", "CalculatorTool"),
+    "get_current_time": ("openjarvis.tools.time_tool", "GetCurrentTimeTool"),
     "think": ("openjarvis.tools.think", "ThinkTool"),
 }
 
