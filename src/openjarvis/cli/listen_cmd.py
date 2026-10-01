@@ -16,6 +16,26 @@ from rich.console import Console
 
 from openjarvis.cli._voice_chat import VOICE_EXIT, VoiceSession, record_voice, speak
 
+import re as _re
+
+_LATEX_INLINE = _re.compile(r"\$\$?(.+?)\$\$?")
+_LATEX_FRAC = _re.compile(r"\\frac\{([^{}]*)\}\{([^{}]*)\}")
+_MD_BOLD_ITALIC = _re.compile(r"[*_]{1,3}")
+_MD_HEADER = _re.compile(r"^#{1,6}\s*", flags=_re.MULTILINE)
+_BACKSLASH_CMD = _re.compile(r"\\[a-zA-Z]+")
+
+
+def _speech_clean(text: str) -> str:
+    """Strip LaTeX/markdown artifacts that TTS would otherwise read literally."""
+    text = _LATEX_FRAC.sub(r"(\1) over (\2)", text)
+    text = _LATEX_INLINE.sub(r"\1", text)
+    text = _BACKSLASH_CMD.sub("", text)
+    text = _MD_HEADER.sub("", text)
+    text = _MD_BOLD_ITALIC.sub("", text)
+    text = text.replace("$", "").replace("\\", "").replace("`", "")
+    text = _re.sub(r"[ \t]+", " ", text)
+    return text.strip()
+
 
 @click.command()
 @click.option(
@@ -76,7 +96,7 @@ def listen(wake_model: Optional[str]) -> None:
                 t_ask = time.perf_counter()
                 result = system.ask(text, voice=True)
                 console.print(f"[dim]timing: agent {time.perf_counter() - t_ask:.1f}s[/dim]")
-                content = result.get("content", "")
+                content = _speech_clean(result.get("content", ""))
             except Exception as exc:
                 console.print(f"[red]Error: {exc}[/red]")
                 console.print(f"[green]Listening for the wake word ({wake_phrase!r})...[/green]")
