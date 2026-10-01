@@ -262,7 +262,17 @@ class NativeOpenHandsAgent(ToolUsingAgent):
                 f"{system_prompt}\n\nVOICE MODE: your reply will be read aloud. "
                 "Answer in 1-2 plain sentences. No markdown, no bullet points, "
                 "no headers. If listing items, speak them as a short spoken "
-                "sentence instead."
+                "sentence instead.\n\n"
+                "SPEECH INPUT CAUTION: the user's words were transcribed by "
+                "speech-to-text and may be garbled or contain errors. For any "
+                "request that looks like arithmetic or a calculation, always use "
+                "the calculator tool to compute the exact result -- never reason "
+                "through math freehand, and never invent a scenario, formula, or "
+                "context (such as shapes, objects, or units) that the user did "
+                "not actually state. If the transcribed text is unclear, garbled, "
+                "or ambiguous -- especially for a math request -- say plainly that "
+                "you did not understand and ask the user to repeat it, rather than "
+                "guessing at what they might have meant."
             )
 
         # Pre-fetch any URLs in the input so the LLM gets the content directly
