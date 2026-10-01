@@ -8,6 +8,7 @@ returns to listening -- no further input needed between exchanges.
 
 from __future__ import annotations
 
+import time
 from typing import Optional
 
 import click
@@ -62,7 +63,9 @@ def listen(wake_model: Optional[str]) -> None:
                 continue
 
             console.print("\n[bold cyan]Wake word detected.[/bold cyan]")
+            t_rec = time.perf_counter()
             text = record_voice(console, voice_session)
+            console.print(f"[dim]timing: listen+transcribe {time.perf_counter() - t_rec:.1f}s[/dim]")
             if text is VOICE_EXIT:
                 break
             if not text:
@@ -70,7 +73,9 @@ def listen(wake_model: Optional[str]) -> None:
                 continue
 
             try:
-                result = system.ask(text)
+                t_ask = time.perf_counter()
+                result = system.ask(text, voice=True)
+                console.print(f"[dim]timing: agent {time.perf_counter() - t_ask:.1f}s[/dim]")
                 content = result.get("content", "")
             except Exception as exc:
                 console.print(f"[red]Error: {exc}[/red]")
@@ -78,7 +83,9 @@ def listen(wake_model: Optional[str]) -> None:
                 continue
 
             console.print(f"[bold]Jarvis:[/bold] {content}")
+            t_speak = time.perf_counter()
             speak(content, console, voice_session)
+            console.print(f"[dim]timing: speak {time.perf_counter() - t_speak:.1f}s for {len(content)} chars[/dim]")
             console.print(f"[green]Listening for the wake word ({wake_phrase!r})...[/green]")
     except KeyboardInterrupt:
         pass

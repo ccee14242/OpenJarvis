@@ -30,6 +30,7 @@ class QueryOrchestrator:
         system_prompt: Optional[str] = None,
         operator_id: Optional[str] = None,
         prior_messages: Optional[List[Message]] = None,
+        voice: bool = False,
     ) -> Dict[str, Any]:
         """Execute a query through the system and return a result dict."""
         s = self._system
@@ -80,6 +81,7 @@ class QueryOrchestrator:
                 system_prompt=system_prompt,
                 operator_id=operator_id,
                 prior_messages=prior_messages,
+                voice=voice,
             )
 
         result = s.engine.generate(
@@ -122,6 +124,7 @@ class QueryOrchestrator:
         *,
         system_prompt=None,
         operator_id=None,
+        voice=False,
         prior_messages=None,
     ) -> Dict[str, Any]:
         """Run through an agent."""
@@ -178,6 +181,21 @@ class QueryOrchestrator:
         )
         if system_prompt is not None:
             agent_kwargs["system_prompt"] = system_prompt
+
+        import inspect as _inspect
+        _init_params = _inspect.signature(agent_cls.__init__).parameters
+        if "prompt_builder" in _init_params:
+            from openjarvis.prompt.builder import SystemPromptBuilder
+
+            agent_kwargs["prompt_builder"] = SystemPromptBuilder(
+                agent_template=s.config.agent.default_system_prompt or "",
+                memory_files_config=s.config.memory_files,
+                system_prompt_config=s.config.system_prompt,
+                skill_catalog_xml=None,
+                skill_few_shot_examples=getattr(s, "_skill_few_shot_examples", None),
+            )
+        if voice and "voice_mode" in _init_params:
+            agent_kwargs["voice_mode"] = True
         if operator_id is not None:
             agent_kwargs["operator_id"] = operator_id
             agent_kwargs["session_store"] = s.session_store

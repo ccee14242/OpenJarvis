@@ -79,10 +79,12 @@ class NativeOpenHandsAgent(ToolUsingAgent):
         agent_id: Optional[str] = None,
         rate_limiter: Optional[Any] = None,
         prompt_builder: Optional[Any] = None,
+        voice_mode: bool = False,
     ) -> None:
         # Kept apart from BaseAgent.prompt_builder on purpose: that one
         # replaces the agent's own system prompt; this one only appends persona.
         self._persona_builder = prompt_builder
+        self._voice_mode = voice_mode
         super().__init__(
             engine,
             model,
@@ -255,6 +257,13 @@ class NativeOpenHandsAgent(ToolUsingAgent):
             persona = self._persona_builder.persona_sections()
             if persona:
                 system_prompt = f"{system_prompt}\n\n{persona}"
+        if self._voice_mode:
+            system_prompt = (
+                f"{system_prompt}\n\nVOICE MODE: your reply will be read aloud. "
+                "Answer in 1-2 plain sentences. No markdown, no bullet points, "
+                "no headers. If listing items, speak them as a short spoken "
+                "sentence instead."
+            )
 
         # Pre-fetch any URLs in the input so the LLM gets the content directly
         input, url_expanded = self._expand_urls(input)
