@@ -18,15 +18,80 @@ from openjarvis.cli._voice_chat import VOICE_EXIT, VoiceSession, record_voice, s
 
 import re as _re
 
+try:
+    from num2words import num2words as _num2words_raw
+
+    def _num2words(n, lang="en"):
+        """num2words wrapper: strips the library\'s own "nine hundred and one"
+        -style "and", which it always inserts and offers no flag to disable.
+        Only touches the isolated number-word string we generate ourselves,
+        never the surrounding sentence, so a real "and" written by the model
+        elsewhere is never affected."""
+        return _num2words_raw(n, lang=lang).replace(" and ", " ")
+except ImportError:
+    _num2words = None
+
 _LATEX_INLINE = _re.compile(r"\$\$?(.+?)\$\$?")
 _LATEX_FRAC = _re.compile(r"\\frac\{([^{}]*)\}\{([^{}]*)\}")
 _MD_BOLD_ITALIC = _re.compile(r"[*_]{1,3}")
 _MD_HEADER = _re.compile(r"^#{1,6}\s*", flags=_re.MULTILINE)
 _BACKSLASH_CMD = _re.compile(r"\\[a-zA-Z]+")
 
+# Currency first (so the $ is consumed before generic number handling sees
+# the digits), then plain comma-grouped or plain integers/decimals.
+_CURRENCY = _re.compile(r"\$\s?(\d[\d,]*)(?:\.(\d{1,2}))?")
+_PLAIN_NUMBER = _re.compile(
+    r"(?<![\w.])(\d{1,3}(?:,\d{3})*|\d+)(?:\.(\d+))?(?![\w])"
+)
+
+
+def _normalize_numbers(text: str) -> str:
+    """Convert digit sequences to spoken words via num2words.
+
+    Runs before LaTeX/markdown stripping so currency symbols and comma
+    grouping are still present to detect. One consistent spoken convention
+    is used regardless of Kokoro/misaki\'s own internal guesswork.
+    """
+    if _num2words is None:
+        return text
+
+    def _currency_repl(m: _re.Match) -> str:
+        dollars = int(m.group(1).replace(",", ""))
+        cents = m.group(2)
+        try:
+            words = _num2words(dollars, lang="en_US")
+        except Exception:
+            return m.group(0)
+        out = f"{words} dollar" + ("s" if dollars != 1 else "")
+        if cents:
+            cents_val = int(cents.ljust(2, "0"))
+            try:
+                cents_words = _num2words(cents_val, lang="en_US")
+                out += f" and {cents_words} cent" + ("s" if cents_val != 1 else "")
+            except Exception:
+                pass
+        return out
+
+    def _plain_repl(m: _re.Match) -> str:
+        whole = m.group(1).replace(",", "")
+        frac = m.group(2)
+        try:
+            if frac:
+                whole_words = _num2words(int(whole), lang="en_US")
+                frac_words = " ".join(_num2words(int(d), lang="en_US") for d in frac)
+                return f"{whole_words} point {frac_words}"
+            return _num2words(int(whole), lang="en_US")
+        except Exception:
+            return m.group(0)
+
+    text = _CURRENCY.sub(_currency_repl, text)
+    text = _PLAIN_NUMBER.sub(_plain_repl, text)
+    return text
+
 
 def _speech_clean(text: str) -> str:
-    """Strip LaTeX/markdown artifacts that TTS would otherwise read literally."""
+    """Normalize numbers, then strip LaTeX/markdown artifacts, for TTS."""
+    text = _normalize_numbers(text)
     text = _LATEX_FRAC.sub(r"(\1) over (\2)", text)
     text = _LATEX_INLINE.sub(r"\1", text)
     text = _BACKSLASH_CMD.sub("", text)
