@@ -102,6 +102,23 @@ def _speech_clean(text: str) -> str:
     return text.strip()
 
 
+_SENTENCE_BOUNDARY = _re.compile(r"(?<=[.!?])\s+")
+
+
+def _truncate_for_voice(text: str, max_sentences: int = 2) -> str:
+    """Hard cap on spoken reply length: a code-level backstop, since the
+    voice-mode system prompt instruction asking for brevity is not always
+    followed by the model. Splits on sentence-ending punctuation (decimals
+    are already converted to \'point\' by _speech_clean\'s number pass, so
+    no stray periods from numbers interfere with this split). Silently
+    drops anything past the cap rather than appending a notice, matching
+    the original brevity instruction\'s intent."""
+    parts = _SENTENCE_BOUNDARY.split(text.strip())
+    if len(parts) <= max_sentences:
+        return text
+    return " ".join(parts[:max_sentences]).strip()
+
+
 @click.command()
 @click.option(
     "--wake-model",
@@ -161,7 +178,7 @@ def listen(wake_model: Optional[str]) -> None:
                 t_ask = time.perf_counter()
                 result = system.ask(text, voice=True)
                 console.print(f"[dim]timing: agent {time.perf_counter() - t_ask:.1f}s[/dim]")
-                content = _speech_clean(result.get("content", ""))
+                content = _truncate_for_voice(_speech_clean(result.get("content", "")))
             except Exception as exc:
                 console.print(f"[red]Error: {exc}[/red]")
                 console.print(f"[green]Listening for the wake word ({wake_phrase!r})...[/green]")
