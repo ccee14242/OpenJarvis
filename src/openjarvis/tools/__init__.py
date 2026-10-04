@@ -138,6 +138,11 @@ except ImportError:
     pass
 
 try:
+    import openjarvis.tools.open_application  # noqa: F401
+except ImportError:
+    pass
+
+try:
     import openjarvis.tools.knowledge_tools  # noqa: F401
 except ImportError:
     pass
