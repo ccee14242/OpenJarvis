@@ -1626,7 +1626,7 @@ class SpeechConfig:
     # Kokoro IDs: bm_george / bm_lewis (British male), bf_emma / bf_isabella
     # (British female), af_* / am_* (American).
     tts_backend: str = "kokoro"  # "kokoro", "openai_tts", "cartesia"
-    voice_id: str = "bm_george"
+    voice_id: str = "af_heart"
     voice_speed: float = 1.0
     # Wake-word detection (jarvis listen). openWakeWord ships several
     # pretrained phrase models; "hey_jarvis" is the one matching this
