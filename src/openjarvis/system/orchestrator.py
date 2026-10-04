@@ -31,6 +31,7 @@ class QueryOrchestrator:
         operator_id: Optional[str] = None,
         prior_messages: Optional[List[Message]] = None,
         voice: bool = False,
+        images: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Execute a query through the system and return a result dict."""
         s = self._system
@@ -82,6 +83,7 @@ class QueryOrchestrator:
                 operator_id=operator_id,
                 prior_messages=prior_messages,
                 voice=voice,
+                images=images,
             )
 
         result = s.engine.generate(
@@ -126,6 +128,7 @@ class QueryOrchestrator:
         operator_id=None,
         voice=False,
         prior_messages=None,
+        images=None,
     ) -> Dict[str, Any]:
         """Run through an agent."""
         from openjarvis.agents._stubs import AgentContext
@@ -267,7 +270,11 @@ class QueryOrchestrator:
                 result = collector.run(query, context=ctx)
                 s.trace_collector = collector
             else:
-                result = ag.run(query, context=ctx)
+                run_params = _inspect.signature(ag.run).parameters
+                run_kwargs = {"context": ctx}
+                if images and "images" in run_params:
+                    run_kwargs["images"] = images
+                result = ag.run(query, **run_kwargs)
         finally:
             s.bus.unsubscribe(EventType.INFERENCE_END, _on_inference_end)
 

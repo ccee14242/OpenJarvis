@@ -85,6 +85,7 @@ class NativeOpenHandsAgent(ToolUsingAgent):
         # replaces the agent's own system prompt; this one only appends persona.
         self._persona_builder = prompt_builder
         self._voice_mode = voice_mode
+        self._pending_images = None
         super().__init__(
             engine,
             model,
@@ -242,6 +243,7 @@ class NativeOpenHandsAgent(ToolUsingAgent):
         self,
         input: str,
         context: Optional[AgentContext] = None,
+        images: Optional[list] = None,
         **kwargs: Any,
     ) -> AgentResult:
         self._emit_turn_start(input)
@@ -317,6 +319,16 @@ class NativeOpenHandsAgent(ToolUsingAgent):
             )
 
         messages = self._build_messages(input, context, system_prompt=system_prompt)
+
+        # Vision: attach images to the last user message, same mechanism as
+        # ask.py's direct-mode path. messages_to_dicts() forwards the
+        # "images" field to Ollama's /api/chat regardless of which code
+        # path built the message.
+        if images:
+            for _m in reversed(messages):
+                if _m.role == Role.USER:
+                    _m.images = images
+                    break
 
         # Inject few-shot exemplars before the user input
         for ex in load_few_shot_exemplars("native_openhands"):

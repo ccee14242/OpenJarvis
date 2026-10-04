@@ -148,11 +148,13 @@ class JarvisSystem:
         operator_id: Optional[str] = None,
         prior_messages: Optional[List[Message]] = None,
         voice: bool = False,
+        images: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         return self._get_orchestrator().ask(
             query,
             context=context,
             voice=voice,
+            images=images,
             temperature=temperature,
             max_tokens=max_tokens,
             agent=agent,
