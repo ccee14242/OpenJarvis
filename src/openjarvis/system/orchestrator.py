@@ -267,7 +267,11 @@ class QueryOrchestrator:
                     store=s.trace_store,
                     bus=s.bus,
                 )
-                result = collector.run(query, context=ctx)
+                collector_run_params = _inspect.signature(ag.run).parameters
+                collector_run_kwargs = {"context": ctx}
+                if images and "images" in collector_run_params:
+                    collector_run_kwargs["images"] = images
+                result = collector.run(query, **collector_run_kwargs)
                 s.trace_collector = collector
             else:
                 run_params = _inspect.signature(ag.run).parameters
