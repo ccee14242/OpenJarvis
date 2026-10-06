@@ -196,9 +196,17 @@ def listen(wake_model: Optional[str]) -> None:
                         with open(_shot, "rb") as _f:
                             _img_b64 = _b64.b64encode(_f.read()).decode("ascii")
                         result = vision_system.ask(text, voice=True, images=[_img_b64])
+                        _vc = result.get("content", "")
+                        if _vc and not _vc.lower().startswith(("roughly", "it looks like", "i'm not certain")):
+                            result["content"] = "Roughly, it looks like " + _vc[0].lower() + _vc[1:]
                     except Exception as exc:
                         console.print(f"[yellow]Screen capture failed: {exc}[/yellow]")
-                        result = system.ask(text, voice=True)
+                        result = {
+                            "content": (
+                                "I couldn't check the screen just now -- "
+                                "something went wrong on my end. Please try again."
+                            )
+                        }
                 else:
                     result = system.ask(text, voice=True)
                 console.print(f"[dim]timing: agent {time.perf_counter() - t_ask:.1f}s[/dim]")
