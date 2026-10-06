@@ -149,6 +149,14 @@ def listen(wake_model: Optional[str]) -> None:
         console.print(f"[red]Could not start JarvisSystem: {exc}[/red]")
         raise SystemExit(1)
 
+    try:
+        vision_system = SystemBuilder().agent("native_openhands").model("gemma3:4b").build()
+    except Exception as exc:
+        console.print(f"[yellow]Screen-check unavailable: {exc}[/yellow]")
+        vision_system = None
+
+    _SCREEN_KEYWORDS = ("screen", "on my display", "what do you see", "look at this")
+
     voice_session = VoiceSession(config)
     wake_phrase = (wake_model or config.speech.wakeword_model).replace("_", " ")
 
@@ -176,7 +184,23 @@ def listen(wake_model: Optional[str]) -> None:
 
             try:
                 t_ask = time.perf_counter()
-                result = system.ask(text, voice=True)
+                is_screen_request = vision_system is not None and any(
+                    kw in text.lower() for kw in _SCREEN_KEYWORDS
+                )
+                if is_screen_request:
+                    try:
+                        import base64 as _b64
+                        from openjarvis.cli._screen import capture_screen_to_temp
+
+                        _shot = capture_screen_to_temp()
+                        with open(_shot, "rb") as _f:
+                            _img_b64 = _b64.encode(_f.read()).decode("ascii") if False else _b64.b64encode(_f.read()).decode("ascii")
+                        result = vision_system.ask(text, voice=True, images=[_img_b64])
+                    except Exception as exc:
+                        console.print(f"[yellow]Screen capture failed: {exc}[/yellow]")
+                        result = system.ask(text, voice=True)
+                else:
+                    result = system.ask(text, voice=True)
                 console.print(f"[dim]timing: agent {time.perf_counter() - t_ask:.1f}s[/dim]")
                 content = _truncate_for_voice(_speech_clean(result.get("content", "")))
             except Exception as exc:
