@@ -194,7 +194,7 @@ def listen(wake_model: Optional[str]) -> None:
 
                         _shot = capture_screen_to_temp()
                         with open(_shot, "rb") as _f:
-                            _img_b64 = _b64.encode(_f.read()).decode("ascii") if False else _b64.b64encode(_f.read()).decode("ascii")
+                            _img_b64 = _b64.b64encode(_f.read()).decode("ascii")
                         result = vision_system.ask(text, voice=True, images=[_img_b64])
                     except Exception as exc:
                         console.print(f"[yellow]Screen capture failed: {exc}[/yellow]")
