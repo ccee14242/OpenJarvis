@@ -50,7 +50,10 @@ OPENHANDS_SYSTEM_PROMPT = (  # noqa: E501
     "- If no tool or code is needed, respond directly "
     "with your answer.\n"
     "- Do NOT include <think> tags or internal reasoning "
-    "in your response. Respond directly."
+    "in your response. Respond directly.\n"
+    "- When reporting a tool\'s result, state only what the tool actually "
+    "returned. Do NOT add invented specifics -- file names, contents, "
+    "counts, or other details -- that the tool result did not contain."
 )
 
 
@@ -325,6 +328,21 @@ class NativeOpenHandsAgent(ToolUsingAgent):
         # "images" field to Ollama's /api/chat regardless of which code
         # path built the message.
         if images:
+            for _m in reversed(messages):
+                if _m.role == Role.USER:
+                    _m.images = images
+                    break
+            system_prompt = (
+                f"{system_prompt}\n\nVISION CAUTION: an image is attached. "
+                "Describe only what you can actually see and are confident "
+                "about. Do not guess at dynamic states (e.g. whether a video "
+                "is playing or paused), text that is too small to read "
+                "clearly, or content that is not visibly present (such as "
+                "browser tabs, windows, or files you cannot actually see "
+                "in the image). If uncertain about a specific detail, say "
+                "so plainly rather than stating a guess as fact."
+            )
+            messages = self._build_messages(input, context, system_prompt=system_prompt)
             for _m in reversed(messages):
                 if _m.role == Role.USER:
                     _m.images = images
