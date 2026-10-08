@@ -52,11 +52,14 @@ class SwitchToApplicationTool(BaseTool):
         return ToolSpec(
             name="switch_to_application",
             description=(
-                "Switch focus to an already-running application by name "
-                "(e.g. 'spotify', 'edge'). Only works for applications that "
-                "are already open -- if nothing matching is currently "
-                "running, say so plainly rather than opening a new instance "
-                "or guessing."
+                "Bring an already-open application window to the front "
+                "(switch to, go to, or focus on an app). Use THIS tool, not "
+                "the calculator tool, when the user says things like "
+                "'switch to calculator' or names any app to switch to: the "
+                "calculator tool only does arithmetic and cannot switch "
+                "windows. Only works for apps that are already open -- if "
+                "nothing matching is running, say so plainly rather than "
+                "opening a new instance or guessing."
             ),
             parameters={
                 "type": "object",
@@ -103,24 +106,37 @@ class SwitchToApplicationTool(BaseTool):
                 success=False,
             )
         if len(candidates) > 1:
-            options = ", ".join(sorted({w["Title"] or w["ProcessName"] for w in candidates}))
-            return ToolResult(
-                tool_name="switch_to_application",
-                content=f"'{app_name}' matches multiple open windows: {options}. Please be more specific.",
-                success=False,
-            )
+            distinct = {(w["ProcessName"], w["Title"]) for w in candidates}
+            if len(distinct) > 1:
+                options = ", ".join(sorted({w["Title"] or w["ProcessName"] for w in candidates}))
+                return ToolResult(
+                    tool_name="switch_to_application",
+                    content=f"'{app_name}' matches multiple different windows: {options}. Please be more specific.",
+                    success=False,
+                )
+            # Several windows of the same app (e.g. two Calculators): switch to the first.
 
         target = candidates[0]
         try:
-            subprocess.run(
+            proc = subprocess.run(
                 [
                     "powershell", "-NoProfile", "-Command",
                     f"(New-Object -ComObject WScript.Shell).AppActivate({target['Id']})",
                 ],
                 capture_output=True,
+                text=True,
                 timeout=10,
                 check=True,
             )
+            if proc.stdout.strip().lower() != "true":
+                return ToolResult(
+                    tool_name="switch_to_application",
+                    content=(
+                        f"Found {target['Title'] or target['ProcessName']} but "
+                        "Windows would not bring it to the front."
+                    ),
+                    success=False,
+                )
             return ToolResult(
                 tool_name="switch_to_application",
                 content=f"Switched to {target['Title'] or target['ProcessName']}.",
