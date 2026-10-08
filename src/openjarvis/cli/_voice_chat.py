@@ -161,7 +161,14 @@ def record_voice(
 
     console.print("[dim]Transcribing…[/dim]")
     try:
-        result = backend.transcribe(audio_bytes, format="wav")
+        import inspect as _inspect
+
+        _tkwargs = {"format": "wav"}
+        _cfg = getattr(active_session, "_config", None)
+        _lang = getattr(getattr(_cfg, "speech", None), "language", "") or ""
+        if _lang and "language" in _inspect.signature(backend.transcribe).parameters:
+            _tkwargs["language"] = _lang
+        result = backend.transcribe(audio_bytes, **_tkwargs)
         text = result.text.strip()
         if text:
             console.print(f"[bold]You (voice):[/bold] {_terminal_safe_text(text)}")

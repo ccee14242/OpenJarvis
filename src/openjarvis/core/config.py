@@ -1617,7 +1617,7 @@ class SpeechConfig:
 
     backend: str = "auto"  # "auto", "faster-whisper", "openai", "deepgram"
     model: str = "base"  # Whisper model size: tiny, base, small, medium, large-v3
-    language: str = ""  # Empty = auto-detect
+    language: str = "en"  # Empty = auto-detect (misfired on short phrases); forced to English
     device: str = "auto"  # "auto", "cpu", "cuda"
     compute_type: str = "float16"  # "float16", "int8", "float32"
     # Text-to-speech. ``voice_id`` is interpreted by ``tts_backend`` only --
