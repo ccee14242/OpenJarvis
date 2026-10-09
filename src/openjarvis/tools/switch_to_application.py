@@ -1,43 +1,129 @@
 """Local application focus-switcher -- brings an already-running window to
-the foreground by matching its title/process name, same safe pattern as
-open_application and close_application.
+the foreground. Finds windows directly via the Win32 API (not by process
+list), restores minimized windows, and reports success only if Windows
+actually made the window the foreground window.
 
 Security model: zero required capabilities; the real boundary is matching
-only against genuinely running windows, never an arbitrary target.
+only against genuinely open windows, never an arbitrary target.
 """
 
 from __future__ import annotations
 
-import subprocess
-from difflib import get_close_matches
+import time
 from typing import Any
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
+_PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_SW_RESTORE = 9
+_DWMWA_CLOAKED = 14
+# The invisible UWP content window and desktop/taskbar plumbing are never
+# what a user means by "switch to X"; the visible frame window is.
+_SKIP_CLASSES = {"Windows.UI.Core.CoreWindow", "Progman", "WorkerW", "Shell_TrayWnd"}
 
-def _list_running_windows() -> list[dict[str, str]]:
-    import json
 
-    result = subprocess.run(
-        [
-            "powershell", "-NoProfile", "-Command",
-            "Get-Process | Where-Object {$_.MainWindowTitle -ne ''} | "
-            "Select-Object ProcessName, MainWindowTitle, Id | ConvertTo-Json -Compress",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=True,
-    )
-    data = json.loads(result.stdout)
-    if isinstance(data, dict):
-        data = [data]
-    return [
-        {"ProcessName": d.get("ProcessName", ""), "Title": d.get("MainWindowTitle", ""), "Id": str(d.get("Id", ""))}
-        for d in data
-    ]
+class _Win32:
+    def __init__(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        self.ct = ctypes
+        self.wt = wintypes
+        u = self.user32 = ctypes.WinDLL("user32", use_last_error=True)
+        k = self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        try:
+            self.dwm = ctypes.WinDLL("dwmapi")
+        except OSError:
+            self.dwm = None
+
+        self.EnumProc = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        u.EnumWindows.argtypes = [self.EnumProc, wintypes.LPARAM]
+        u.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+        u.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        u.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+        u.IsWindowVisible.argtypes = [wintypes.HWND]
+        u.IsIconic.argtypes = [wintypes.HWND]
+        u.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        u.SetForegroundWindow.argtypes = [wintypes.HWND]
+        u.GetForegroundWindow.restype = wintypes.HWND
+        u.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        u.keybd_event.argtypes = [wintypes.BYTE, wintypes.BYTE, wintypes.DWORD, ctypes.c_size_t]
+        k.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k.OpenProcess.restype = wintypes.HANDLE
+        k.QueryFullProcessImageNameW.argtypes = [
+            wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)
+        ]
+        k.QueryFullProcessImageNameW.restype = wintypes.BOOL
+        k.CloseHandle.argtypes = [wintypes.HANDLE]
+
+    def _exe_name(self, hwnd) -> str:
+        pid = self.wt.DWORD(0)
+        self.user32.GetWindowThreadProcessId(hwnd, self.ct.byref(pid))
+        handle = self.kernel32.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid.value)
+        if not handle:
+            return ""
+        try:
+            size = self.wt.DWORD(1024)
+            buf = self.ct.create_unicode_buffer(1024)
+            if not self.kernel32.QueryFullProcessImageNameW(handle, 0, buf, self.ct.byref(size)):
+                return ""
+            name = buf.value.replace("/", "\\").split("\\")[-1].lower()
+            return name[:-4] if name.endswith(".exe") else name
+        finally:
+            self.kernel32.CloseHandle(handle)
+
+    def _cloaked(self, hwnd) -> bool:
+        if self.dwm is None:
+            return False
+        try:
+            val = self.ct.c_int(0)
+            res = self.dwm.DwmGetWindowAttribute(
+                self.wt.HWND(hwnd), _DWMWA_CLOAKED, self.ct.byref(val), self.ct.sizeof(val)
+            )
+            return res == 0 and val.value != 0
+        except Exception:
+            return False
+
+    def list_windows(self) -> list[dict[str, Any]]:
+        found: list[dict[str, Any]] = []
+
+        def cb(hwnd, lparam):
+            if not self.user32.IsWindowVisible(hwnd):
+                return True
+            n = self.user32.GetWindowTextLengthW(hwnd)
+            if not n:
+                return True
+            tbuf = self.ct.create_unicode_buffer(n + 1)
+            self.user32.GetWindowTextW(hwnd, tbuf, n + 1)
+            cbuf = self.ct.create_unicode_buffer(256)
+            self.user32.GetClassNameW(hwnd, cbuf, 256)
+            if cbuf.value in _SKIP_CLASSES or self._cloaked(hwnd):
+                return True
+            found.append({
+                "hwnd": hwnd,
+                "title": tbuf.value,
+                "cls": cbuf.value,
+                "exe": self._exe_name(hwnd),
+                "iconic": bool(self.user32.IsIconic(hwnd)),
+            })
+            return True
+
+        self.user32.EnumWindows(self.EnumProc(cb), 0)
+        return found  # EnumWindows order is top-to-bottom z-order
+
+    def bring_to_front(self, win: dict[str, Any]) -> bool:
+        hwnd = win["hwnd"]
+        if win["iconic"]:
+            self.user32.ShowWindow(hwnd, _SW_RESTORE)
+            time.sleep(0.4)
+        # A synthetic Alt press is the usual way past Windows' foreground lock.
+        self.user32.keybd_event(0x12, 0, 0, 0)
+        self.user32.keybd_event(0x12, 0, 2, 0)
+        self.user32.SetForegroundWindow(hwnd)
+        time.sleep(0.3)
+        return self.user32.GetForegroundWindow() == hwnd
 
 
 @ToolRegistry.register("switch_to_application")
@@ -81,70 +167,56 @@ class SwitchToApplicationTool(BaseTool):
             return ToolResult(tool_name="switch_to_application", content="No app_name provided.", success=False)
 
         try:
-            windows = _list_running_windows()
+            api = _Win32()
+            windows = api.list_windows()
         except Exception as exc:
             return ToolResult(
                 tool_name="switch_to_application",
-                content=f"Could not list running windows: {exc}",
+                content=f"Could not list open windows: {exc}",
                 success=False,
             )
 
         query = app_name.lower()
-        candidates = [
-            w for w in windows
-            if query in w["Title"].lower() or query in w["ProcessName"].lower()
-        ]
+        candidates = [w for w in windows if query in w["title"].lower() or query in w["exe"]]
 
-        if len(candidates) == 0:
-            close = get_close_matches(
-                app_name, [w["Title"] for w in windows] + [w["ProcessName"] for w in windows], n=3, cutoff=0.6
-            )
-            suggestion = f" Did you mean: {', '.join(close)}?" if close else ""
+        if not candidates:
             return ToolResult(
                 tool_name="switch_to_application",
-                content=f"Nothing matching '{app_name}' is currently running.{suggestion}",
+                content=f"Nothing matching '{app_name}' is currently open.",
                 success=False,
             )
-        if len(candidates) > 1:
-            distinct = {(w["ProcessName"], w["Title"]) for w in candidates}
-            if len(distinct) > 1:
-                options = ", ".join(sorted({w["Title"] or w["ProcessName"] for w in candidates}))
-                return ToolResult(
-                    tool_name="switch_to_application",
-                    content=f"'{app_name}' matches multiple different windows: {options}. Please be more specific.",
-                    success=False,
-                )
-            # Several windows of the same app (e.g. two Calculators): switch to the first.
+
+        # Store apps all share one host exe, so tell them apart by title;
+        # everything else by executable. Several windows of one app are fine
+        # (we take the topmost); different apps are ambiguous.
+        def key(w: dict[str, Any]) -> str:
+            return w["title"] if w["exe"] == "applicationframehost" else w["exe"]
+
+        if len({key(w) for w in candidates}) > 1:
+            options = ", ".join(sorted({w["title"] for w in candidates}))
+            return ToolResult(
+                tool_name="switch_to_application",
+                content=f"'{app_name}' matches different open apps: {options}. Please be more specific.",
+                success=False,
+            )
 
         target = candidates[0]
         try:
-            proc = subprocess.run(
-                [
-                    "powershell", "-NoProfile", "-Command",
-                    f"(New-Object -ComObject WScript.Shell).AppActivate({target['Id']})",
-                ],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=True,
-            )
-            if proc.stdout.strip().lower() != "true":
-                return ToolResult(
-                    tool_name="switch_to_application",
-                    content=(
-                        f"Found {target['Title'] or target['ProcessName']} but "
-                        "Windows would not bring it to the front."
-                    ),
-                    success=False,
-                )
-            return ToolResult(
-                tool_name="switch_to_application",
-                content=f"Switched to {target['Title'] or target['ProcessName']}.",
-                success=True,
-            )
+            ok = api.bring_to_front(target)
         except Exception as exc:
             return ToolResult(
                 tool_name="switch_to_application",
-                content=f"Found {target['Title'] or target['ProcessName']} but failed to switch to it: {exc}",
+                content=f"Found {target['title']} but failed to switch to it: {exc}",
                 success=False,
             )
+        if not ok:
+            return ToolResult(
+                tool_name="switch_to_application",
+                content=f"Found {target['title']} but Windows would not bring it to the front.",
+                success=False,
+            )
+        return ToolResult(
+            tool_name="switch_to_application",
+            content=f"Switched to {target['title']}.",
+            success=True,
+        )
