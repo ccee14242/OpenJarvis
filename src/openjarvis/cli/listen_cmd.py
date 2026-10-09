@@ -198,7 +198,17 @@ def listen(wake_model: Optional[str]) -> None:
                         result = vision_system.ask(text, voice=True, images=[_img_b64])
                         _vc = result.get("content", "")
                         if _vc and not _vc.lower().startswith(("roughly", "it looks like", "i'm not certain")):
-                            result["content"] = "Roughly, it looks like " + _vc[0].lower() + _vc[1:]
+                            # Strip a leading honorific/name so it reads naturally after the
+                            # caveat instead of colliding with it (e.g. "...it looks like sir, the...").
+                            _vc_stripped = _vc
+                            for _lead in ("sir, ", "Sir, "):
+                                if _vc_stripped.startswith(_lead):
+                                    _vc_stripped = _vc_stripped[len(_lead):]
+                                    break
+                            result["content"] = (
+                                "Based on a rough look, sir -- "
+                                + _vc_stripped[0].lower() + _vc_stripped[1:]
+                            )
                     except Exception as exc:
                         console.print(f"[yellow]Screen capture failed: {exc}[/yellow]")
                         result = {
