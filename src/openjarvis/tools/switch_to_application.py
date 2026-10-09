@@ -177,7 +177,11 @@ class SwitchToApplicationTool(BaseTool):
             )
 
         query = app_name.lower()
-        candidates = [w for w in windows if query in w["title"].lower() or query in w["exe"]]
+        # Title matches win; the exe name is only a fallback (e.g. Spotify,
+        # whose title is the current song). Otherwise helper windows owned by
+        # the same process (like Calculator's "PopupHost") cause false ambiguity.
+        by_title = [w for w in windows if query in w["title"].lower()]
+        candidates = by_title or [w for w in windows if query in w["exe"]]
 
         if not candidates:
             return ToolResult(
