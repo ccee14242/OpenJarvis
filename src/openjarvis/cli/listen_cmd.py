@@ -222,11 +222,10 @@ def listen(wake_model: Optional[str]) -> None:
         console.print(f"[red]Could not start JarvisSystem: {exc}[/red]")
         raise SystemExit(1)
 
-    try:
-        vision_system = SystemBuilder().agent("native_openhands").model("gemma3:4b").build()
-    except Exception as exc:
-        console.print(f"[yellow]Screen-check unavailable: {exc}[/yellow]")
-        vision_system = None
+    # Built lazily on the first screen request. Every SystemBuilder().build()
+    # registers its own audit logger on the shared event bus, so building a
+    # second system at startup made every audit row appear twice.
+    vision_system = None
 
     _SCREEN_KEYWORDS = ("screen", "on my display", "what do you see", "look at this")
 
@@ -258,7 +257,7 @@ def listen(wake_model: Optional[str]) -> None:
             try:
                 t_ask = time.perf_counter()
                 _routed = _try_route_command(system, text)
-                is_screen_request = _routed is None and vision_system is not None and any(
+                is_screen_request = _routed is None and any(
                     kw in text.lower() for kw in _SCREEN_KEYWORDS
                 )
                 if _routed is not None:
@@ -271,6 +270,11 @@ def listen(wake_model: Optional[str]) -> None:
                         _shot = capture_screen_to_temp()
                         with open(_shot, "rb") as _f:
                             _img_b64 = _b64.b64encode(_f.read()).decode("ascii")
+                        if vision_system is None:
+                            console.print("[dim]Loading the screen-check system (first use)...[/dim]")
+                            vision_system = (
+                                SystemBuilder().agent("native_openhands").model("gemma3:4b").build()
+                            )
                         result = vision_system.ask(text, voice=True, images=[_img_b64])
                         _vc = result.get("content", "")
                         if _vc and not _vc.lower().startswith(("roughly", "it looks like", "i'm not certain")):
