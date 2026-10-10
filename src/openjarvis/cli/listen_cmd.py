@@ -106,7 +106,7 @@ _SENTENCE_BOUNDARY = _re.compile(r"(?<=[.!?])\s+")
 
 
 _ROUTE_VERBS = _re.compile(
-    r"^\s*(?:please[\s,]+)?(open|launch|close|switch\s+to)[\s,.:;-]+(?:the\s+|my\s+)?(.+?)[\s.!?,]*$",
+    r"^\s*(?:(?:can|could|would|will)\s+you\s+)?(?:please[\s,]+)?(open|launch|close|switch\s+to)[\s,.:;-]+(?:the\s+|my\s+)?(.+?)[\s.!?,]*$",
     _re.IGNORECASE,
 )
 _ROUTE_TOOLS = {
@@ -114,6 +114,10 @@ _ROUTE_TOOLS = {
     "launch": ("open_application", "Opened"),
     "close": ("close_application", "Closed"),
     "switch to": ("switch_to_application", "Switched to"),
+}
+_ROUTE_IGNORE = {
+    "it", "this", "that", "them", "those", "these", "window", "windows",
+    "app", "apps", "up", "down", "all", "everything", "one", "now",
 }
 _PROTECTED_CLOSE = {
     "powershell", "windows powershell", "terminal", "windows terminal",
@@ -133,7 +137,13 @@ def _try_route_command(system, text: str):
         return None
     verb = " ".join(m.group(1).lower().split())
     app = m.group(2).strip()
-    if not app or len(app.split()) > 3:
+    app = _re.sub(r"[\s,]+please$", "", app, flags=_re.IGNORECASE).strip()
+    words = app.lower().split()
+    if not words or len(words) > 3:
+        return None
+    # No model sits in between, so skip pronouns/filler and tiny fragments
+    # ("close it", "open up") that would match a random window.
+    if all(w in _ROUTE_IGNORE for w in words) or len("".join(words)) < 3:
         return None
     executor = getattr(system, "tool_executor", None)
     if executor is None:
@@ -156,7 +166,8 @@ def _try_route_command(system, text: str):
     msg = str(res.content)
     if res.success:
         if len(msg) <= 70:
-            return msg.rstrip(".") + ", sir."
+            first, _, rest = msg.partition(". ")
+            return first.rstrip(".") + ", sir." + (f" {rest}" if rest else "")
         return f"{past} {app}, sir."
     if msg.startswith("Nothing matching") or "is not an installed application" in msg:
         if tool_name == "open_application":
