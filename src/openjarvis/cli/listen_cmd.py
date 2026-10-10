@@ -105,6 +105,58 @@ def _speech_clean(text: str) -> str:
 _SENTENCE_BOUNDARY = _re.compile(r"(?<=[.!?])\s+")
 
 
+_ROUTE_VERBS = _re.compile(
+    r"^\s*(?:please\s+)?(open|launch|close|switch\s+to)\s+(?:the\s+|my\s+)?(.+?)[\s.!?,]*$",
+    _re.IGNORECASE,
+)
+_ROUTE_TOOLS = {
+    "open": ("open_application", "Opened"),
+    "launch": ("open_application", "Opened"),
+    "close": ("close_application", "Closed"),
+    "switch to": ("switch_to_application", "Switched to"),
+}
+_PROTECTED_CLOSE = {
+    "powershell", "windows powershell", "terminal", "windows terminal",
+    "command prompt", "cmd", "jarvis",
+}
+
+
+def _try_route_command(system, text: str):
+    """Deterministic fast path for 'open X', 'close X' and 'switch to X'.
+
+    Returns the sentence to speak, or None to fall through to the model.
+    Calls go through system.tool_executor (not tool.execute directly) so
+    the capability policy, rate limiter and audit log still apply.
+    """
+    m = _ROUTE_VERBS.match(text)
+    if not m:
+        return None
+    verb = " ".join(m.group(1).lower().split())
+    app = m.group(2).strip()
+    if not app or len(app.split()) > 3:
+        return None
+    executor = getattr(system, "tool_executor", None)
+    if executor is None:
+        return None
+    tool_name, past = _ROUTE_TOOLS[verb]
+    if tool_name == "close_application" and app.lower() in _PROTECTED_CLOSE:
+        return "I won't close the terminal I am running in, sir."
+    try:
+        import json as _json
+        from openjarvis.core.types import ToolCall
+
+        res = executor.execute(
+            ToolCall(id="voice_route", name=tool_name, arguments=_json.dumps({"app_name": app}))
+        )
+    except Exception:
+        return None
+    if str(res.content).startswith("Unknown tool"):
+        return None
+    if res.success:
+        return f"{past} {app}, sir."
+    return str(res.content)
+
+
 def _truncate_for_voice(text: str, max_sentences: int = 2) -> str:
     """Hard cap on spoken reply length: a code-level backstop, since the
     voice-mode system prompt instruction asking for brevity is not always
@@ -184,10 +236,13 @@ def listen(wake_model: Optional[str]) -> None:
 
             try:
                 t_ask = time.perf_counter()
-                is_screen_request = vision_system is not None and any(
+                _routed = _try_route_command(system, text)
+                is_screen_request = _routed is None and vision_system is not None and any(
                     kw in text.lower() for kw in _SCREEN_KEYWORDS
                 )
-                if is_screen_request:
+                if _routed is not None:
+                    result = {"content": _routed}
+                elif is_screen_request:
                     try:
                         import base64 as _b64
                         from openjarvis.cli._screen import capture_screen_to_temp
