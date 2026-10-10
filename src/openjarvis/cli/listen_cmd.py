@@ -106,7 +106,7 @@ _SENTENCE_BOUNDARY = _re.compile(r"(?<=[.!?])\s+")
 
 
 _ROUTE_VERBS = _re.compile(
-    r"^\s*(?:(?:can|could|would|will)\s+you\s+)?(?:please[\s,]+)?(open|launch|close|switch\s+to)[\s,.:;-]+(?:the\s+|my\s+)?(.+?)[\s.!?,]*$",
+    r"^\s*(?:(?:and|then|now|ok|okay|so|alright)[\s,]+)*(?:(?:can|could|would|will)\s+you\s+|you\s+)?(?:please[\s,]+)?(open|launch|close|switch\s+to)[\s,.:;-]+(?:the\s+|my\s+)?(.+?)[\s.!?,]*$",
     _re.IGNORECASE,
 )
 _ROUTE_TOOLS = {
