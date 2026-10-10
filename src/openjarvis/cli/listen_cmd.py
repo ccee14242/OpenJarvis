@@ -106,7 +106,7 @@ _SENTENCE_BOUNDARY = _re.compile(r"(?<=[.!?])\s+")
 
 
 _ROUTE_VERBS = _re.compile(
-    r"^\s*(?:please\s+)?(open|launch|close|switch\s+to)\s+(?:the\s+|my\s+)?(.+?)[\s.!?,]*$",
+    r"^\s*(?:please[\s,]+)?(open|launch|close|switch\s+to)[\s,.:;-]+(?:the\s+|my\s+)?(.+?)[\s.!?,]*$",
     _re.IGNORECASE,
 )
 _ROUTE_TOOLS = {
@@ -152,9 +152,19 @@ def _try_route_command(system, text: str):
         return None
     if str(res.content).startswith("Unknown tool"):
         return None
+    print(f"route: {tool_name}({app!r}) -> success={res.success} | {res.content}")
+    msg = str(res.content)
     if res.success:
+        if len(msg) <= 70:
+            return msg.rstrip(".") + ", sir."
         return f"{past} {app}, sir."
-    return str(res.content)
+    if msg.startswith("Nothing matching") or "is not an installed application" in msg:
+        if tool_name == "open_application":
+            return f"I couldn't find an app called {app}, sir."
+        return f"{app} doesn't seem to be open, sir."
+    if "matches multiple" in msg or "matches different" in msg:
+        return f"More than one app matches {app}, sir. Please be more specific."
+    return msg if len(msg) <= 90 else "I couldn't do that, sir."
 
 
 def _truncate_for_voice(text: str, max_sentences: int = 2) -> str:

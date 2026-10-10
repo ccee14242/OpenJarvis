@@ -1,52 +1,63 @@
-"""Local application closer -- closes a running app by matching its visible
-window title or process name against what's actually running.
+"""Local application closer -- asks a running app's window to close.
 
-Security model: same as open_application -- zero required capabilities,
-matched only against genuinely running processes with a visible window.
-Never accepts or constructs an arbitrary process name/PID from model output
-without first confirming a real match exists.
+Finds windows directly through the Win32 API and sends WM_CLOSE (the same
+request as clicking the X, so apps with unsaved work can still prompt),
+then checks the window actually went away before reporting success. It
+never kills a process, so shared hosts such as ApplicationFrameHost (which
+backs every Store app) are not touched.
+
+Security model: zero required capabilities; the boundary is matching only
+genuinely open windows by app name, never an arbitrary target.
 """
 
 from __future__ import annotations
 
-import subprocess
-from difflib import get_close_matches
+import time
 from typing import Any
 
 from openjarvis.core.registry import ToolRegistry
 from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
+from openjarvis.tools.switch_to_application import _Win32
+
+_WM_CLOSE = 0x0010
+# Never close the window Jarvis itself is running in.
+_PROTECTED_EXES = {
+    "windowsterminal", "powershell", "pwsh", "cmd", "conhost",
+    "openconsole", "python", "pythonw",
+}
 
 
-def _list_running_windows() -> list[dict[str, str]]:
-    """Return [{"ProcessName": ..., "Title": ..., "Id": ...}, ...] for every
-    process with a visible main window. Raises on failure -- callers handle."""
-    import json
+def _app_label(title: str) -> str:
+    """The app-name part of a window title: 'ask.py - Notepad' -> 'Notepad'.
+    Document and tab names are ignored, so 'close news' can't close a
+    browser just because one tab is called 'News'."""
+    for sep in (" - ", " \u2013 ", " \u2014 "):
+        if sep in title:
+            title = title.rsplit(sep, 1)[-1]
+    return title
 
-    result = subprocess.run(
-        [
-            "powershell", "-NoProfile", "-Command",
-            "Get-Process | Where-Object {$_.MainWindowTitle -ne ''} | "
-            "Select-Object ProcessName, MainWindowTitle, Id | ConvertTo-Json -Compress",
-        ],
-        capture_output=True,
-        text=True,
-        timeout=15,
-        check=True,
-    )
-    data = json.loads(result.stdout)
-    if isinstance(data, dict):
-        data = [data]
-    return [
-        {"ProcessName": d.get("ProcessName", ""), "Title": d.get("MainWindowTitle", ""), "Id": str(d.get("Id", ""))}
-        for d in data
-    ]
+
+def _close_window(api: _Win32, hwnd: int) -> str:
+    """Returns 'closed', 'open' (still there after 4 s) or 'blocked'."""
+    wt = api.wt
+    user32 = api.user32
+    user32.PostMessageW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM]
+    user32.PostMessageW.restype = wt.BOOL
+    user32.IsWindow.argtypes = [wt.HWND]
+    if not user32.PostMessageW(hwnd, _WM_CLOSE, 0, 0):
+        return "blocked"
+    deadline = time.time() + 4.0
+    while time.time() < deadline:
+        if not user32.IsWindow(hwnd) or not user32.IsWindowVisible(hwnd):
+            return "closed"
+        time.sleep(0.25)
+    return "open"
 
 
 @ToolRegistry.register("close_application")
 class CloseApplicationTool(BaseTool):
-    """Close a running application by matching its window title or process
-    name against what's genuinely running -- never an invented target."""
+    """Close a running application by asking its window to close."""
 
     tool_id = "close_application"
     is_local = True
@@ -82,48 +93,75 @@ class CloseApplicationTool(BaseTool):
             return ToolResult(tool_name="close_application", content="No app_name provided.", success=False)
 
         try:
-            windows = _list_running_windows()
+            api = _Win32()
+            windows = api.list_windows()
         except Exception as exc:
             return ToolResult(
                 tool_name="close_application",
-                content=f"Could not list running windows: {exc}",
+                content=f"Could not list open windows: {exc}",
                 success=False,
             )
 
         query = app_name.lower()
         candidates = [
             w for w in windows
-            if query in w["Title"].lower() or query in w["ProcessName"].lower()
+            if query in w["exe"] or query in _app_label(w["title"]).lower()
         ]
-
-        if len(candidates) == 0:
-            names = ", ".join(sorted({w["ProcessName"] for w in windows}))
-            close = get_close_matches(app_name, [w["Title"] for w in windows] + [w["ProcessName"] for w in windows], n=3, cutoff=0.6)
-            suggestion = f" Did you mean: {', '.join(close)}?" if close else f" Currently open: {names}."
+        if not candidates:
             return ToolResult(
                 tool_name="close_application",
-                content=f"Nothing matching '{app_name}' is currently running.{suggestion}",
+                content=f"Nothing matching '{app_name}' is currently open.",
                 success=False,
             )
-        if len(candidates) > 1:
-            options = ", ".join(sorted({w["Title"] or w["ProcessName"] for w in candidates}))
+
+        # Store apps share one host exe, so tell them apart by title; every
+        # other app by executable. Several windows of one app are fine (we
+        # close the topmost); different apps are ambiguous.
+        def key(w: dict[str, Any]) -> str:
+            return w["title"] if w["exe"] == "applicationframehost" else w["exe"]
+
+        if len({key(w) for w in candidates}) > 1:
+            options = ", ".join(sorted({_app_label(w["title"]) or w["exe"] for w in candidates}))
             return ToolResult(
                 tool_name="close_application",
-                content=f"'{app_name}' matches multiple open windows: {options}. Please be more specific.",
+                content=f"'{app_name}' matches different open apps: {options}. Please be more specific.",
                 success=False,
             )
 
         target = candidates[0]
-        try:
-            subprocess.run(["taskkill", "/PID", target["Id"]], capture_output=True, timeout=10, check=True)
+        if target["exe"] in _PROTECTED_EXES:
             return ToolResult(
                 tool_name="close_application",
-                content=f"Closed {target['Title'] or target['ProcessName']}.",
-                success=True,
+                content="I won't close the terminal Jarvis is running in.",
+                success=False,
             )
+
+        label = _app_label(target["title"]) or target["exe"]
+        same = [w for w in candidates if key(w) == key(target)]
+        try:
+            status = _close_window(api, target["hwnd"])
         except Exception as exc:
             return ToolResult(
                 tool_name="close_application",
-                content=f"Found {target['Title'] or target['ProcessName']} but failed to close it: {exc}",
+                content=f"Found {label} but failed to close it: {exc}",
                 success=False,
             )
+        if status == "blocked":
+            return ToolResult(
+                tool_name="close_application",
+                content=f"Windows would not let me close {label}.",
+                success=False,
+            )
+        if status == "open":
+            return ToolResult(
+                tool_name="close_application",
+                content=f"Asked {label} to close, but it is still open -- it may be waiting for you to save.",
+                success=False,
+            )
+        more = len(same) - 1
+        extra = f" {more} more {label} window{'s' if more != 1 else ''} still open." if more else ""
+        return ToolResult(
+            tool_name="close_application",
+            content=f"Closed {label}.{extra}",
+            success=True,
+        )
