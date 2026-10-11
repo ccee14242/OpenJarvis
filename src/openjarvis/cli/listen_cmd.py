@@ -230,6 +230,22 @@ def listen(wake_model: Optional[str]) -> None:
     _SCREEN_KEYWORDS = ("screen", "on my display", "what do you see", "look at this")
 
     voice_session = VoiceSession(config)
+
+    # Load the speech models now so the first spoken reply is not the slow
+    # one (Kokoro's first synthesis took 25-75 s). The audio is discarded;
+    # any failure is ignored and models then load lazily as before.
+    console.print("[dim]Warming up the voice (first start can take a minute)...[/dim]")
+    try:
+        voice_session.get_stt_backend()
+        _tts = voice_session.get_tts_backend()
+        if _tts is not None:
+            _vid, _spd = voice_session.voice_for_backend(_tts)
+            _kw = {"output_format": "wav", "speed": _spd}
+            if _vid:
+                _kw["voice_id"] = _vid
+            _tts.synthesize("Ready.", **_kw)
+    except Exception as exc:
+        console.print(f"[dim yellow]Voice warm-up skipped: {exc}[/dim yellow]")
     wake_phrase = (wake_model or config.speech.wakeword_model).replace("_", " ")
 
     console.print(f"[green]Listening for the wake word ({wake_phrase!r})...[/green]")
