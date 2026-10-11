@@ -116,10 +116,19 @@ def setup_security(
     # Audit logger
     audit = None
     try:
-        audit = AuditLogger(
-            db_path=config.security.audit_log_path,
-            bus=bus,
-        )
+        # One logger per (db, bus): every extra AuditLogger subscribes to the
+        # shared bus again, so a second system in the same process wrote every
+        # audit row twice.
+        _loggers = setup_security.__dict__.setdefault("_audit_loggers", {})
+        _key = (str(config.security.audit_log_path), id(bus))
+        audit = _loggers.get(_key) if bus is not None else None
+        if audit is None:
+            audit = AuditLogger(
+                db_path=config.security.audit_log_path,
+                bus=bus,
+            )
+            if bus is not None:
+                _loggers[_key] = audit
     except Exception as exc:
         logger.debug("Failed to set up audit logger: %s", exc)
 
