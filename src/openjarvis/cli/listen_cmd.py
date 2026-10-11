@@ -84,6 +84,28 @@ def _normalize_numbers(text: str) -> str:
         except Exception:
             return m.group(0)
 
+    def _time_repl(m: _re.Match) -> str:
+        h, mi, mer = int(m.group(1)), int(m.group(2)), m.group(3)
+        if h > 23 or mi > 59:
+            return m.group(0)
+        try:
+            hw = _num2words(h, lang="en_US")
+            mw = _num2words(mi, lang="en_US")
+        except Exception:
+            return m.group(0)
+        if mi == 0:
+            out = hw if mer else hw + " o'clock"
+        elif mi < 10:
+            out = hw + " oh " + mw
+        else:
+            out = hw + " " + mw
+        if mer:
+            out += " A M" if mer.lower() == "a" else " P M"
+        return out
+
+    text = _re.sub(
+        r"(?<![\w:.])(\d{1,2}):(\d{2})(?:\s?([AaPp])\.?[Mm])?(?![\w:])", _time_repl, text
+    )
     text = _CURRENCY.sub(_currency_repl, text)
     text = _PLAIN_NUMBER.sub(_plain_repl, text)
     return text
@@ -142,6 +164,7 @@ _UNIT_SECONDS = {"second": 1, "minute": 60, "hour": 3600}
 _LEAD = r"^\s*(?:(?:and|then|now|ok|okay|so|alright)[\s,]+)*(?:(?:can|could|would|will)\s+you\s+|you\s+)?(?:please[\s,]+)?"
 _REMIND_IN = _re.compile(_LEAD + r"remind\s+me\s+in\s+(?P<dur>.+?)\s+(?:to|that)\s+(?P<msg>.+?)[\s.!?,]*$", _re.IGNORECASE)
 _REMIND_TO_IN = _re.compile(_LEAD + r"remind\s+me\s+(?:to|that)\s+(?P<msg>.+)\s+in\s+(?P<dur>.+?)[\s.!?,]*$", _re.IGNORECASE)
+_REMIND_BARE = _re.compile(_LEAD + r"remind\s+me\s+in\s+(?P<dur>.+?)[\s.!?,]*$", _re.IGNORECASE)
 _REMIND_ANY = _re.compile(_LEAD + r"remind\s+me\b", _re.IGNORECASE)
 _TIMER = _re.compile(_LEAD + r"(?:set|start|create)\s+(?:me\s+)?(?:an?\s+)?(?:(?P<a>.+?)\s+)?timer(?:\s+for\s+(?P<b>.+?))?[\s.!?,]*$", _re.IGNORECASE)
 
@@ -174,11 +197,57 @@ def _parse_duration(s: str):
     return count * _UNIT_SECONDS[unit], f"{m.group('n')} {word}"
 
 
+_LIST_REM = _re.compile(
+    _LEAD + r"(?:(?:what|which)\s+(?:reminders?|timers?)\s+(?:do\s+i\s+have|are\s+(?:set|pending))|do\s+i\s+have\s+any\s+(?:reminders?|timers?)|(?:list|show|read)\s+(?:me\s+)?(?:(?:all|my|the)\s+)*(?:reminders?|timers?))[\s.!?,]*$",
+    _re.IGNORECASE,
+)
+_CANCEL_REM = _re.compile(
+    _LEAD + r"(?:cancel|clear|delete|remove)\s+(?:(?:all|my|the|any)\s+)*(?:reminders?|timers?)[\s.!?,]*$",
+    _re.IGNORECASE,
+)
+
+
+def _route_reminder_admin(system, text: str):
+    if _LIST_REM.match(text):
+        args = {"action": "list"}
+    elif _CANCEL_REM.match(text):
+        low = text.lower()
+        kind = ""
+        if "timer" in low and "reminder" not in low:
+            kind = "timer"
+        elif "reminder" in low and "timer" not in low:
+            kind = "reminder"
+        args = {"action": "cancel", "kind": kind}
+    else:
+        return None
+    executor = getattr(system, "tool_executor", None)
+    if executor is None:
+        return None
+    try:
+        import json as _json
+        from openjarvis.core.types import ToolCall
+
+        res = executor.execute(
+            ToolCall(id="voice_route", name="set_reminder", arguments=_json.dumps(args))
+        )
+    except Exception:
+        return None
+    print(f"route: set_reminder({args}) -> success={res.success} | {res.content}")
+    if str(res.content).startswith("Unknown tool"):
+        return "Reminders aren't in my tool list yet, sir."
+    if not res.success:
+        return "I couldn't do that, sir."
+    return str(res.content).rstrip(".") + ", sir."
+
+
 def _try_route_reminder(system, text: str):
+    _admin = _route_reminder_admin(system, text)
+    if _admin is not None:
+        return _admin
     kind, msg = None, ""
-    m = _REMIND_IN.match(text) or _REMIND_TO_IN.match(text)
+    m = _REMIND_IN.match(text) or _REMIND_TO_IN.match(text) or _REMIND_BARE.match(text)
     if m:
-        kind, dur, msg = "reminder", m.group("dur"), m.group("msg").strip()
+        kind, dur, msg = "reminder", m.group("dur"), (m.groupdict().get("msg") or "").strip()
     else:
         t = _TIMER.match(text)
         if t:
@@ -198,7 +267,7 @@ def _try_route_reminder(system, text: str):
     executor = getattr(system, "tool_executor", None)
     if executor is None:
         return None
-    message = msg if kind == "reminder" else f"Your timer for {label} is up, sir."
+    message = (msg or "your time is up") if kind == "reminder" else f"Your timer for {label} is up, sir."
     try:
         import json as _json
         from openjarvis.core.types import ToolCall
@@ -219,6 +288,8 @@ def _try_route_reminder(system, text: str):
         return "I couldn't set that, sir."
     if kind == "timer":
         return f"Timer set for {label}, sir."
+    if not msg:
+        return f"I'll remind you in {label}, sir."
     return f"I'll remind you in {label} to {msg}, sir."
 
 

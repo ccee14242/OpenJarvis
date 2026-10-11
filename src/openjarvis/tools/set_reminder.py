@@ -76,6 +76,13 @@ def _fail(message: str) -> ToolResult:
     return ToolResult(tool_name="set_reminder", content=message, success=False)
 
 
+def _describe(r: dict) -> str:
+    when = time.strftime("%I:%M %p", time.localtime(r["due"])).lstrip("0")
+    if r.get("kind") == "timer":
+        return f"a timer at {when}"
+    return f"{r['message']} at {when}"
+
+
 @ToolRegistry.register("set_reminder")
 class SetReminderTool(BaseTool):
     """Set a spoken reminder or timer that goes off after some seconds."""
@@ -98,15 +105,47 @@ class SetReminderTool(BaseTool):
                 "properties": {
                     "seconds": {"type": "number", "description": "Seconds from now until it goes off."},
                     "message": {"type": "string", "description": "What to say when it goes off."},
-                    "kind": {"type": "string", "description": "'reminder' (default) or 'timer'."},
+                    "kind": {"type": "string", "description": "'reminder' (default) or 'timer'. With action 'cancel', limits what is cancelled."},
+                    "action": {"type": "string", "description": "'set' (default), 'list' to read back pending reminders, or 'cancel'."},
                 },
-                "required": ["seconds", "message"],
+                "required": [],
             },
             category="system",
             required_capabilities=[],
         )
 
     def execute(self, **params: Any) -> ToolResult:
+        action = str(params.get("action", "set") or "set").lower()
+        if action == "list":
+            items = sorted(load_reminders(), key=lambda r: r["due"])
+            if not items:
+                return ToolResult(tool_name="set_reminder", content="No reminders are set.", success=True)
+            shown = "; ".join(_describe(r) for r in items[:5])
+            extra = f"; and {len(items) - 5} more" if len(items) > 5 else ""
+            noun = "reminder" if len(items) == 1 else "reminders"
+            return ToolResult(
+                tool_name="set_reminder",
+                content=f"You have {len(items)} {noun}: {shown}{extra}.",
+                success=True,
+            )
+        if action == "cancel":
+            kind = str(params.get("kind", "")).lower()
+            items = load_reminders()
+            if kind in ("reminder", "timer"):
+                keep = [r for r in items if r.get("kind", "reminder") != kind]
+            else:
+                keep = []
+            try:
+                _save(keep)
+            except Exception as exc:
+                return _fail(f"Could not cancel: {exc}")
+            n = len(items) - len(keep)
+            if n == 0:
+                return ToolResult(tool_name="set_reminder", content="There was nothing to cancel.", success=True)
+            noun = "reminder" if n == 1 else "reminders"
+            return ToolResult(tool_name="set_reminder", content=f"Cancelled {n} {noun}.", success=True)
+        if action != "set":
+            return _fail("action must be set, list or cancel.")
         try:
             seconds = float(params.get("seconds"))
         except (TypeError, ValueError):
