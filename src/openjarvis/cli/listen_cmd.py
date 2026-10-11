@@ -125,6 +125,138 @@ _PROTECTED_CLOSE = {
 }
 
 
+_NUM_WORDS = {
+    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
+    "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11, "twelve": 12,
+    "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+    "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+    "thirty": 30, "forty": 40, "fifty": 50, "sixty": 60, "seventy": 70,
+    "eighty": 80, "ninety": 90,
+}
+_UNIT_CANON = {
+    "second": "second", "seconds": "second", "sec": "second", "secs": "second",
+    "minute": "minute", "minutes": "minute", "min": "minute", "mins": "minute",
+    "hour": "hour", "hours": "hour", "hr": "hour", "hrs": "hour",
+}
+_UNIT_SECONDS = {"second": 1, "minute": 60, "hour": 3600}
+_LEAD = r"^\s*(?:(?:and|then|now|ok|okay|so|alright)[\s,]+)*(?:(?:can|could|would|will)\s+you\s+|you\s+)?(?:please[\s,]+)?"
+_REMIND_IN = _re.compile(_LEAD + r"remind\s+me\s+in\s+(?P<dur>.+?)\s+(?:to|that)\s+(?P<msg>.+?)[\s.!?,]*$", _re.IGNORECASE)
+_REMIND_TO_IN = _re.compile(_LEAD + r"remind\s+me\s+(?:to|that)\s+(?P<msg>.+)\s+in\s+(?P<dur>.+?)[\s.!?,]*$", _re.IGNORECASE)
+_REMIND_ANY = _re.compile(_LEAD + r"remind\s+me\b", _re.IGNORECASE)
+_TIMER = _re.compile(_LEAD + r"(?:set|start|create)\s+(?:me\s+)?(?:an?\s+)?(?:(?P<a>.+?)\s+)?timer(?:\s+for\s+(?P<b>.+?))?[\s.!?,]*$", _re.IGNORECASE)
+
+
+def _parse_count(s: str):
+    s = s.strip()
+    if _re.fullmatch(r"\d+(?:\.\d+)?", s):
+        return float(s)
+    if s in ("a", "an"):
+        return 1.0
+    words = s.split()
+    if not words or any(w not in _NUM_WORDS for w in words):
+        return None
+    return float(sum(_NUM_WORDS[w] for w in words))
+
+
+def _parse_duration(s: str):
+    # Returns (seconds, spoken_label) or None.
+    s = _re.sub(r"\s+", " ", _re.sub(r"[-,]", " ", s.lower())).strip()
+    if s in ("half an hour", "half hour", "a half hour", "a half an hour"):
+        return 1800.0, "half an hour"
+    m = _re.fullmatch(r"(?P<n>\d+(?:\.\d+)?|[a-z]+(?: [a-z]+)?) ?(?P<u>seconds?|secs?|minutes?|mins?|hours?|hrs?)", s)
+    if not m:
+        return None
+    count = _parse_count(m.group("n"))
+    if count is None:
+        return None
+    unit = _UNIT_CANON[m.group("u")]
+    word = unit + ("" if count == 1 else "s")
+    return count * _UNIT_SECONDS[unit], f"{m.group('n')} {word}"
+
+
+def _try_route_reminder(system, text: str):
+    kind, msg = None, ""
+    m = _REMIND_IN.match(text) or _REMIND_TO_IN.match(text)
+    if m:
+        kind, dur, msg = "reminder", m.group("dur"), m.group("msg").strip()
+    else:
+        t = _TIMER.match(text)
+        if t:
+            kind, dur = "timer", (t.group("b") or t.group("a") or "")
+        elif _REMIND_ANY.match(text):
+            return "I can set a reminder like this, sir: remind me in ten minutes to check the oven."
+        else:
+            return None
+    parsed = _parse_duration(dur)
+    if parsed is None:
+        if kind == "timer":
+            return "I didn't catch how long, sir. Try: set a timer for five minutes."
+        return "I didn't catch how long, sir. Try: remind me in ten minutes to check the oven."
+    seconds, label = parsed
+    if not 1 <= seconds <= 86400:
+        return "I can set reminders from one second up to twenty-four hours, sir."
+    executor = getattr(system, "tool_executor", None)
+    if executor is None:
+        return None
+    message = msg if kind == "reminder" else f"Your timer for {label} is up, sir."
+    try:
+        import json as _json
+        from openjarvis.core.types import ToolCall
+
+        res = executor.execute(
+            ToolCall(
+                id="voice_route",
+                name="set_reminder",
+                arguments=_json.dumps({"seconds": seconds, "message": message, "kind": kind}),
+            )
+        )
+    except Exception:
+        return None
+    print(f"route: set_reminder({seconds:g}s, {kind}) -> success={res.success} | {res.content}")
+    if str(res.content).startswith("Unknown tool"):
+        return "Reminders aren't in my tool list yet, sir."
+    if not res.success:
+        return "I couldn't set that, sir."
+    if kind == "timer":
+        return f"Timer set for {label}, sir."
+    return f"I'll remind you in {label} to {msg}, sir."
+
+
+def _seconds_until_next_reminder():
+    try:
+        from openjarvis.tools.set_reminder import seconds_until_next
+
+        wait = seconds_until_next()
+    except Exception:
+        return None
+    return None if wait is None else max(1.0, wait)
+
+
+def _speak_due_reminders(console, voice_session) -> None:
+    try:
+        from openjarvis.tools.set_reminder import due_reminders, remove_reminders
+
+        due = due_reminders()
+    except Exception:
+        return
+    done = []
+    for r in due:
+        late = time.time() - float(r["due"])
+        text = r["message"] if r.get("kind") == "timer" else f"Reminder, sir: {r['message']}"
+        if late > 90:
+            text += " This one came due while I wasn't listening."
+        console.print(f"[bold cyan]Reminder due:[/bold cyan] {text}")
+        try:
+            speak(_speech_clean(text), console, voice_session)
+        except Exception as exc:
+            console.print(f"[yellow]Could not speak the reminder: {exc}[/yellow]")
+        done.append(r["id"])
+    try:
+        remove_reminders(done)
+    except Exception as exc:
+        console.print(f"[yellow]Could not clear reminders: {exc}[/yellow]")
+
+
 def _try_route_command(system, text: str):
     """Deterministic fast path for 'open X', 'close X' and 'switch to X'.
 
@@ -132,6 +264,9 @@ def _try_route_command(system, text: str):
     Calls go through system.tool_executor (not tool.execute directly) so
     the capability policy, rate limiter and audit log still apply.
     """
+    _rem = _try_route_reminder(system, text)
+    if _rem is not None:
+        return _rem
     m = _ROUTE_VERBS.match(text)
     if not m:
         return None
@@ -253,8 +388,10 @@ def listen(wake_model: Optional[str]) -> None:
 
     try:
         while True:
+            _speak_due_reminders(console, voice_session)
+            _wait = _seconds_until_next_reminder()
             try:
-                heard = wakeword.listen()
+                heard = wakeword.listen(timeout=_wait)
             except KeyboardInterrupt:
                 break
             if not heard:

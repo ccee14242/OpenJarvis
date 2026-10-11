@@ -245,6 +245,7 @@ DEFAULT_TOOL_CAPABILITIES: Dict[str, List[str]] = {
     "open_application": [],
     "close_application": [],
     "switch_to_application": [],
+    "set_reminder": [],
     "get_weather": [Capability.NETWORK_FETCH],
     "git_commit": [Capability.FILE_WRITE],
     "git_diff": [Capability.FILE_READ],
@@ -288,6 +289,7 @@ _SAFE_BUILTIN_PROVENANCE = {
     "open_application": ("openjarvis.tools.open_application", "OpenApplicationTool"),
     "close_application": ("openjarvis.tools.close_application", "CloseApplicationTool"),
     "switch_to_application": ("openjarvis.tools.switch_to_application", "SwitchToApplicationTool"),
+    "set_reminder": ("openjarvis.tools.set_reminder", "SetReminderTool"),
     "think": ("openjarvis.tools.think", "ThinkTool"),
 }
 

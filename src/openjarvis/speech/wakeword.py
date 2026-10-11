@@ -71,9 +71,15 @@ class OpenWakeWordBackend(WakeWordBackend):
     def stop(self) -> None:
         self._stop_event.set()
 
-    def listen(self) -> bool:
-        """Block until the wake word is detected, or ``stop()`` is called."""
+    def listen(self, timeout: Optional[float] = None) -> bool:
+        """Block until the wake word is detected, ``stop()`` is called, or
+        ``timeout`` seconds pass (None = wait forever). Returns False on stop
+        or timeout."""
+        import time
+
         import sounddevice as sd
+
+        deadline = None if timeout is None else time.monotonic() + max(0.0, timeout)
 
         model = self._ensure_model()
         chunk_size = int(_CAPTURE_SAMPLE_RATE * _CHUNK_SECONDS)
@@ -91,6 +97,8 @@ class OpenWakeWordBackend(WakeWordBackend):
             latency="high",
         ) as stream:
             while not self._stop_event.is_set():
+                if deadline is not None and time.monotonic() >= deadline:
+                    return False
                 audio, _ = stream.read(chunk_size)
                 audio = audio.flatten()[::downsample_factor]
                 prediction = model.predict(audio)
