@@ -7,6 +7,23 @@ from typing import Any, Optional
 from rich.markup import escape
 
 VOICE_EXIT = object()
+
+# Vocabulary hint for Whisper: biases it toward the command words we route.
+_VOICE_PROMPT = (
+    "Commands: open calculator, close Spotify, switch to Notepad, "
+    "remind me in ten minutes to check the oven, set a timer for five minutes, "
+    "what reminders do I have, cancel my reminders."
+)
+
+
+def _norm_words(s: str) -> str:
+    return " ".join("".join(c.lower() if c.isalnum() else " " for c in s).split())
+
+
+def _looks_like_prompt_echo(text: str) -> bool:
+    """Whisper sometimes echoes its prompt when the audio is silent or unclear."""
+    t, p = _norm_words(text), _norm_words(_VOICE_PROMPT)
+    return bool(t) and ((t in p and len(t) >= 0.6 * len(p)) or t.startswith("commands "))
 _TTS_BACKEND_ORDER = ("kokoro",)  # local only: never fall back to cloud TTS
 # Voice IDs are backend-specific and NOT portable. ``speech.voice_id`` applies
 # only to ``speech.tts_backend``; if synthesis falls back to another backend we
@@ -168,8 +185,13 @@ def record_voice(
         _lang = getattr(getattr(_cfg, "speech", None), "language", "") or ""
         if _lang and "language" in _inspect.signature(backend.transcribe).parameters:
             _tkwargs["language"] = _lang
+        if "initial_prompt" in _inspect.signature(backend.transcribe).parameters:
+            _tkwargs["initial_prompt"] = _VOICE_PROMPT
         result = backend.transcribe(audio_bytes, **_tkwargs)
         text = result.text.strip()
+        if text and _looks_like_prompt_echo(text):
+            console.print("[dim]Nothing heard, try again.[/dim]")
+            return None
         if text:
             console.print(f"[bold]You (voice):[/bold] {_terminal_safe_text(text)}")
             return text

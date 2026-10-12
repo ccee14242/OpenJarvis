@@ -318,7 +318,7 @@ def _speak_due_reminders(console, voice_session) -> None:
         late = time.time() - float(r["due"])
         text = r["message"] if r.get("kind") == "timer" else f"Reminder, sir: {r['message']}"
         if late > 90:
-            text += " This one came due while I wasn't listening."
+            text += " Sorry, that one is running late."
         console.print(f"[bold cyan]Reminder due:[/bold cyan] {text}")
         try:
             speak(_speech_clean(text), console, voice_session)
