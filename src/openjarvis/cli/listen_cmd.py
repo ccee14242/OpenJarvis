@@ -272,13 +272,16 @@ def _try_route_reminder(system, text: str):
         import json as _json
         from openjarvis.core.types import ToolCall
 
-        res = executor.execute(
-            ToolCall(
-                id="voice_route",
-                name="set_reminder",
-                arguments=_json.dumps({"seconds": seconds, "message": message, "kind": kind}),
+        from openjarvis.tools.set_reminder import router_call
+
+        with router_call():
+            res = executor.execute(
+                ToolCall(
+                    id="voice_route",
+                    name="set_reminder",
+                    arguments=_json.dumps({"seconds": seconds, "message": message, "kind": kind}),
+                )
             )
-        )
     except Exception:
         return None
     print(f"route: set_reminder({seconds:g}s, {kind}) -> success={res.success} | {res.content}")

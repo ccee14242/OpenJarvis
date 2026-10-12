@@ -8,6 +8,7 @@ the limits below (24 hours, 50 pending, 200 characters).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import time
@@ -20,6 +21,20 @@ from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 MAX_SECONDS = 24 * 3600
+_router_active = False
+
+
+@contextlib.contextmanager
+def router_call():
+    """Marks calls made by the voice command router. Only those may set a
+    reminder: the 4B model called set_reminder on garbled speech and invented
+    durations, so model-initiated sets are refused."""
+    global _router_active
+    _router_active = True
+    try:
+        yield
+    finally:
+        _router_active = False
 _MAX_PENDING = 50
 _MAX_MESSAGE = 200
 
@@ -95,10 +110,11 @@ class SetReminderTool(BaseTool):
         return ToolSpec(
             name="set_reminder",
             description=(
-                "Set a spoken reminder or timer that goes off after a number of "
-                "seconds (at most 24 hours). Convert the user's duration to "
-                "seconds yourself. It is only spoken while the voice assistant "
-                "is running."
+                "List or cancel pending reminders and timers (action 'list' or "
+                "'cancel'). Do NOT use this tool to set one: setting is handled "
+                "by the voice command router. If the user wants a reminder, tell "
+                "them to say, for example, 'remind me in ten minutes to check "
+                "the oven'."
             ),
             parameters={
                 "type": "object",
@@ -146,6 +162,11 @@ class SetReminderTool(BaseTool):
             return ToolResult(tool_name="set_reminder", content=f"Cancelled {n} {noun}.", success=True)
         if action != "set":
             return _fail("action must be set, list or cancel.")
+        if not _router_active:
+            return _fail(
+                "I can only set reminders from a clear voice command, for example: "
+                "remind me in ten minutes to check the oven."
+            )
         try:
             seconds = float(params.get("seconds"))
         except (TypeError, ValueError):
