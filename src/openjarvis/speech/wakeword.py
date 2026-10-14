@@ -43,6 +43,7 @@ class OpenWakeWordBackend(WakeWordBackend):
         self._mic_device = mic_device
         self._model = None
         self._stop_event = threading.Event()
+        self._interrupt_event = threading.Event()
 
     def _ensure_model(self):
         if self._model is None:
@@ -67,6 +68,10 @@ class OpenWakeWordBackend(WakeWordBackend):
             return True
         except Exception:
             return False
+
+    def interrupt(self) -> None:
+        """Make the current (or next) listen() return False once, without stopping."""
+        self._interrupt_event.set()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -98,6 +103,9 @@ class OpenWakeWordBackend(WakeWordBackend):
         ) as stream:
             while not self._stop_event.is_set():
                 if deadline is not None and time.monotonic() >= deadline:
+                    return False
+                if self._interrupt_event.is_set():
+                    self._interrupt_event.clear()
                     return False
                 audio, _ = stream.read(chunk_size)
                 audio = audio.flatten()[::downsample_factor]

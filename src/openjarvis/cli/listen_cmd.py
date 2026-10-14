@@ -8,6 +8,8 @@ returns to listening -- no further input needed between exchanges.
 
 from __future__ import annotations
 
+import queue
+import threading
 import time
 from typing import Optional
 
@@ -272,14 +274,14 @@ def _try_route_reminder(system, text: str):
         import json as _json
         from openjarvis.core.types import ToolCall
 
-        from openjarvis.tools.set_reminder import router_call
+        from openjarvis.tools.set_reminder import ROUTER_KEY, router_call
 
         with router_call():
             res = executor.execute(
                 ToolCall(
                     id="voice_route",
                     name="set_reminder",
-                    arguments=_json.dumps({"seconds": seconds, "message": message, "kind": kind}),
+                    arguments=_json.dumps({"seconds": seconds, "message": message, "kind": kind, "_router_key": ROUTER_KEY}),
                 )
             )
     except Exception:
@@ -329,6 +331,86 @@ def _speak_due_reminders(console, voice_session) -> None:
         remove_reminders(done)
     except Exception as exc:
         console.print(f"[yellow]Could not clear reminders: {exc}[/yellow]")
+
+
+_LATE_ECHO_SECS = 15.0
+
+
+class _Jobs:
+    """Runs one model call at a time on a background thread. The worker never
+    speaks or prints: it queues its answer, and the main loop speaks it
+    between wake-word listens, when the microphone stream is closed."""
+
+    def __init__(self, system, wakeword) -> None:
+        self._system = system
+        self._wakeword = wakeword
+        self._q = queue.Queue()
+        self._thread = None
+
+    def busy(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self, question: str) -> None:
+        started = time.monotonic()
+
+        def run() -> None:
+            item = {"question": question}
+            try:
+                result = self._system.ask(question, voice=True)
+                item["content"] = result.get("content", "")
+            except Exception as exc:
+                item["error"] = str(exc)
+            item["secs"] = time.monotonic() - started
+            self._q.put(item)
+            wake = getattr(self._wakeword, "interrupt", None)
+            if wake is not None:
+                try:
+                    wake()
+                except Exception:
+                    pass
+
+        self._thread = threading.Thread(target=run, name="jarvis-model", daemon=True)
+        self._thread.start()
+
+    def finished(self) -> list:
+        out = []
+        while True:
+            try:
+                out.append(self._q.get_nowait())
+            except queue.Empty:
+                return out
+
+
+def _short_question(q: str, words: int = 8) -> str:
+    parts = " ".join(q.split()).strip(" .!?,").split()
+    if len(parts) > words:
+        cut = parts[:words]
+        while len(cut) > 3 and cut[-1].lower() in {"the", "and", "of", "a", "an", "to", "in", "on", "for", "is", "or"}:
+            cut.pop()
+        return " ".join(cut) + " and so on"
+    return " ".join(parts)
+
+
+def _speak_finished_answers(console, voice_session, jobs) -> None:
+    for item in jobs.finished():
+        console.print(f"[dim]timing: model answer took {item['secs']:.0f}s[/dim]")
+        if item.get("error"):
+            console.print(f"[red]Error: {item['error']}[/red]")
+            text = "Sorry, sir, I couldn't answer that."
+        else:
+            body = _truncate_for_voice(_speech_clean(item.get("content", "")))
+            if not body:
+                body = "I didn't come up with an answer, sir."
+            text = body
+            if item["secs"] > _LATE_ECHO_SECS:
+                q = _short_question(item["question"])
+                if q:
+                    text = _speech_clean(f"You asked, {q}.") + " " + body
+        console.print(f"[bold]Jarvis:[/bold] {text}")
+        try:
+            speak(text, console, voice_session)
+        except Exception as exc:
+            console.print(f"[yellow]Could not speak the answer: {exc}[/yellow]")
 
 
 def _try_route_command(system, text: str):
@@ -460,9 +542,12 @@ def listen(wake_model: Optional[str]) -> None:
     console.print(f"[green]Listening for the wake word ({wake_phrase!r})...[/green]")
     console.print("[dim]Press Ctrl+C to stop.[/dim]")
 
+    jobs = _Jobs(system, wakeword)
+
     try:
         while True:
             _speak_due_reminders(console, voice_session)
+            _speak_finished_answers(console, voice_session, jobs)
             _wait = _seconds_until_next_reminder()
             try:
                 heard = wakeword.listen(timeout=_wait)
@@ -489,6 +574,13 @@ def listen(wake_model: Optional[str]) -> None:
                 )
                 if _routed is not None:
                     result = {"content": _routed}
+                elif is_screen_request and jobs.busy():
+                    result = {
+                        "content": (
+                            "I'm still working on your last question, sir. "
+                            "Ask me about the screen once I'm done."
+                        )
+                    }
                 elif is_screen_request:
                     try:
                         import base64 as _b64
@@ -525,7 +617,11 @@ def listen(wake_model: Optional[str]) -> None:
                             )
                         }
                 else:
-                    result = system.ask(text, voice=True)
+                    if jobs.busy():
+                        result = {"content": "I'm still working on your last question, sir."}
+                    else:
+                        jobs.start(text)
+                        result = {"content": "On it, sir."}
                 console.print(f"[dim]timing: agent {time.perf_counter() - t_ask:.1f}s[/dim]")
                 content = _truncate_for_voice(_speech_clean(result.get("content", "")))
             except Exception as exc:
@@ -543,7 +639,7 @@ def listen(wake_model: Optional[str]) -> None:
     finally:
         wakeword.stop()
         console.print("\n[dim]Stopped listening.[/dim]")
-        if hasattr(system, "close"):
+        if hasattr(system, "close") and not jobs.busy():
             try:
                 system.close()
             except Exception:

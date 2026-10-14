@@ -11,6 +11,8 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import secrets
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -21,7 +23,10 @@ from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 MAX_SECONDS = 24 * 3600
-_router_active = False
+_tls = threading.local()
+# Secret only the voice router knows. The tool may run on a different thread
+# than the router, so a thread-local flag is not enough.
+ROUTER_KEY = secrets.token_hex(16)
 
 
 @contextlib.contextmanager
@@ -29,12 +34,11 @@ def router_call():
     """Marks calls made by the voice command router. Only those may set a
     reminder: the 4B model called set_reminder on garbled speech and invented
     durations, so model-initiated sets are refused."""
-    global _router_active
-    _router_active = True
+    _tls.active = True
     try:
         yield
     finally:
-        _router_active = False
+        _tls.active = False
 _MAX_PENDING = 50
 _MAX_MESSAGE = 200
 
@@ -162,7 +166,7 @@ class SetReminderTool(BaseTool):
             return ToolResult(tool_name="set_reminder", content=f"Cancelled {n} {noun}.", success=True)
         if action != "set":
             return _fail("action must be set, list or cancel.")
-        if not _router_active:
+        if params.get("_router_key") != ROUTER_KEY:
             return _fail(
                 "I can only set reminders from a clear voice command, for example: "
                 "remind me in ten minutes to check the oven."
