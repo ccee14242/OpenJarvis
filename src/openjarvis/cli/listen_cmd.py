@@ -403,7 +403,7 @@ def _speak_finished_answers(console, voice_session, jobs) -> None:
                 body = "I didn't come up with an answer, sir."
             text = body
             if item["secs"] > _LATE_ECHO_SECS:
-                q = _short_question(item["question"])
+                q = _lower_question_lead(_short_question(item["question"]))
                 if q:
                     text = _speech_clean(f"You asked, {q}.") + " " + body
         console.print(f"[bold]Jarvis:[/bold] {text}")
@@ -413,6 +413,96 @@ def _speak_finished_answers(console, voice_session, jobs) -> None:
             console.print(f"[yellow]Could not speak the answer: {exc}[/yellow]")
 
 
+_BRIEF_ASK = _re.compile(
+    _LEAD + r"(?:good\s+(?:morning|afternoon|evening)(?:[\s,]+(?:jarvis|sir))?|brief\s+me|(?:give|read)\s+me\s+(?:my|the)\s+(?:(?:morning|daily)\s+)?brief(?:ing)?|(?:what(?:'s|\s+is)\s+)?(?:my|the)\s+(?:(?:morning|daily)\s+)?brief(?:ing)?|(?:morning|daily)\s+brief(?:ing)?)(?:\s+please)?[\s.!?,]*$",
+    _re.IGNORECASE,
+)
+_QUESTION_LEADS = {
+    "what", "what's", "whats", "how", "why", "who", "when", "where", "which",
+    "can", "could", "would", "is", "are", "do", "does", "did", "tell", "explain",
+    "give", "describe", "define", "show", "list", "write", "summarize", "compare",
+}
+
+
+def _lower_question_lead(q: str) -> str:
+    """'What is meditation' -> 'what is meditation' for the spoken echo, but
+    leave names like 'Spotify' alone."""
+    first = q.split(" ", 1)[0].strip(",.?!").lower() if q else ""
+    if first in _QUESTION_LEADS and q[:1].isupper():
+        return q[0].lower() + q[1:]
+    return q
+
+
+def _brief_text(system) -> str:
+    from datetime import datetime
+
+    now = datetime.now()
+    part = "morning" if now.hour < 12 else "afternoon" if now.hour < 18 else "evening"
+    try:
+        from num2words import num2words as _n2w
+
+        day = _n2w(now.day, to="ordinal", lang="en_US")
+    except Exception:
+        day = str(now.day)
+    text = f"Good {part}, sir. It is {now.strftime('%A, %B')} {day}."
+    reminders = ""
+    try:
+        import json as _json
+        from openjarvis.core.types import ToolCall
+
+        executor = getattr(system, "tool_executor", None)
+        if executor is not None:
+            res = executor.execute(
+                ToolCall(id="voice_brief", name="set_reminder", arguments=_json.dumps({"action": "list"}))
+            )
+            if res.success and not str(res.content).startswith("Unknown tool"):
+                reminders = str(res.content)
+    except Exception:
+        reminders = ""
+    if reminders.startswith("No reminders"):
+        reminders = "You have no reminders set."
+    return (text + " " + reminders).strip()
+
+
+def _brief_state_path():
+    from pathlib import Path
+
+    return Path.home() / ".openjarvis" / "last_brief.txt"
+
+
+def _speak_morning_brief(console, voice_session, system) -> None:
+    """Speak the brief once per day, on the first start. Never blocks startup
+    on an error. JARVIS_NO_BRIEF=1 turns it off."""
+    import os
+    from datetime import date
+
+    if os.environ.get("JARVIS_NO_BRIEF"):
+        return
+    try:
+        today = date.today().isoformat()
+        path = _brief_state_path()
+        try:
+            if path.read_text(encoding="utf-8").strip() == today:
+                return
+        except Exception:
+            pass
+        text = _brief_text(system)
+        console.print(f"[bold]Jarvis:[/bold] {text}")
+        speak(_speech_clean(text), console, voice_session)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(today, encoding="utf-8")
+    except KeyboardInterrupt:
+        return
+    except Exception as exc:
+        console.print(f"[yellow]Could not speak the brief: {exc}[/yellow]")
+
+
+def _try_route_brief(system, text: str):
+    if not _BRIEF_ASK.match(text):
+        return None
+    return _brief_text(system)
+
+
 def _try_route_command(system, text: str):
     """Deterministic fast path for 'open X', 'close X' and 'switch to X'.
 
@@ -420,6 +510,9 @@ def _try_route_command(system, text: str):
     Calls go through system.tool_executor (not tool.execute directly) so
     the capability policy, rate limiter and audit log still apply.
     """
+    _brf = _try_route_brief(system, text)
+    if _brf is not None:
+        return _brf
     _rem = _try_route_reminder(system, text)
     if _rem is not None:
         return _rem
@@ -542,6 +635,7 @@ def listen(wake_model: Optional[str]) -> None:
     console.print(f"[green]Listening for the wake word ({wake_phrase!r})...[/green]")
     console.print("[dim]Press Ctrl+C to stop.[/dim]")
 
+    _speak_morning_brief(console, voice_session, system)
     jobs = _Jobs(system, wakeword)
 
     try:
@@ -623,7 +717,9 @@ def listen(wake_model: Optional[str]) -> None:
                         jobs.start(text)
                         result = {"content": "On it, sir."}
                 console.print(f"[dim]timing: agent {time.perf_counter() - t_ask:.1f}s[/dim]")
-                content = _truncate_for_voice(_speech_clean(result.get("content", "")))
+                content = _speech_clean(result.get("content", ""))
+                if _routed is None:
+                    content = _truncate_for_voice(content)
             except Exception as exc:
                 console.print(f"[red]Error: {exc}[/red]")
                 console.print(f"[green]Listening for the wake word ({wake_phrase!r})...[/green]")
