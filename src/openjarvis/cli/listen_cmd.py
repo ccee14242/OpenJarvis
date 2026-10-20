@@ -503,6 +503,13 @@ def _try_route_brief(system, text: str):
     return _brief_text(system)
 
 
+def _is_junk_transcript(text: str) -> bool:
+    """One or two words that did not route as a command. These are almost always
+    a clipped or misheard phrase ('Spotify.', 'For if me.'), and sending them to
+    the model holds the single model slot for minutes."""
+    return len(_re.findall(r"[A-Za-z0-9']+", text)) <= 2
+
+
 def _try_route_command(system, text: str):
     """Deterministic fast path for 'open X', 'close X' and 'switch to X'.
 
@@ -711,7 +718,11 @@ def listen(wake_model: Optional[str]) -> None:
                             )
                         }
                 else:
-                    if jobs.busy():
+                    if _is_junk_transcript(text):
+                        result = {
+                            "content": "I didn't catch that, sir. Please say the whole command again."
+                        }
+                    elif jobs.busy():
                         result = {"content": "I'm still working on your last question, sir."}
                     else:
                         jobs.start(text)
