@@ -139,13 +139,21 @@ class FasterWhisperBackend(SpeechBackend):
             raise
 
         # Build result
+        from math import exp as _exp
+
         text = "".join(seg.text for seg in segments_list).strip()
         segments = [
             Segment(
                 text=seg.text.strip(),
                 start=seg.start,
                 end=seg.end,
-                confidence=None,
+                # exp(avg_logprob): a rough 0-1 score of how sure Whisper was of
+                # the words, not a calibrated probability.
+                confidence=(
+                    _exp(seg.avg_logprob)
+                    if getattr(seg, "avg_logprob", None) is not None
+                    else None
+                ),
             )
             for seg in segments_list
         ]

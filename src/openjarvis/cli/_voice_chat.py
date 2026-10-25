@@ -16,6 +16,16 @@ _VOICE_PROMPT = (
 )
 
 
+def _mean_confidence(result):
+    """Average segment confidence, or None if the backend gave none."""
+    vals = [
+        s.confidence
+        for s in (getattr(result, "segments", None) or [])
+        if getattr(s, "confidence", None) is not None
+    ]
+    return sum(vals) / len(vals) if vals else None
+
+
 def _norm_words(s: str) -> str:
     return " ".join("".join(c.lower() if c.isalnum() else " " for c in s).split())
 
@@ -189,6 +199,7 @@ def record_voice(
             _tkwargs["initial_prompt"] = _VOICE_PROMPT
         result = backend.transcribe(audio_bytes, **_tkwargs)
         text = result.text.strip()
+        active_session.last_confidence = _mean_confidence(result)
         if text and _looks_like_prompt_echo(text):
             console.print("[dim]Nothing heard, try again.[/dim]")
             return None

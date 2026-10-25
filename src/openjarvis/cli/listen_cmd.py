@@ -510,6 +510,14 @@ def _is_junk_transcript(text: str) -> bool:
     return len(_re.findall(r"[A-Za-z0-9']+", text)) <= 2
 
 
+_MIN_CONFIDENCE = 0.2  # exp(avg_logprob): the one mumbled probe scored 0.12, clear commands 0.40+
+
+
+def _is_low_confidence(session) -> bool:
+    c = getattr(session, "last_confidence", None)
+    return c is not None and c < _MIN_CONFIDENCE
+
+
 def _try_route_command(system, text: str):
     """Deterministic fast path for 'open X', 'close X' and 'switch to X'.
 
@@ -661,6 +669,9 @@ def listen(wake_model: Optional[str]) -> None:
             t_rec = time.perf_counter()
             text = record_voice(console, voice_session)
             console.print(f"[dim]timing: listen+transcribe {time.perf_counter() - t_rec:.1f}s[/dim]")
+            _conf = getattr(voice_session, "last_confidence", None)
+            if isinstance(text, str) and text and _conf is not None:
+                console.print(f"[dim]confidence: {_conf:.2f}[/dim]")
             if text is VOICE_EXIT:
                 break
             if not text:
@@ -718,7 +729,7 @@ def listen(wake_model: Optional[str]) -> None:
                             )
                         }
                 else:
-                    if _is_junk_transcript(text):
+                    if _is_junk_transcript(text) or _is_low_confidence(voice_session):
                         result = {
                             "content": "I didn't catch that, sir. Please say the whole command again."
                         }
