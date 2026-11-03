@@ -403,6 +403,8 @@ def _vision_caveat(content: str) -> str:
         if c.startswith(lead):
             c = c[len(lead):]
             break
+    if c[:2] in ("I ", "I'") or c.startswith(("I've", "I'm", "I'll")):
+        return "Based on a rough look, sir -- " + c
     return "Based on a rough look, sir -- " + c[0].lower() + c[1:]
 
 
