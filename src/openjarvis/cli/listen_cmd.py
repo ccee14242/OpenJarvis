@@ -346,17 +346,27 @@ class _Jobs:
         self._wakeword = wakeword
         self._q = queue.Queue()
         self._thread = None
+        self._vision = None
 
     def busy(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
-    def start(self, question: str) -> None:
+    def start(self, question: str, image=None) -> None:
         started = time.monotonic()
 
         def run() -> None:
-            item = {"question": question}
+            item = {"question": question, "vision": image is not None}
             try:
-                result = self._system.ask(question, voice=True)
+                if image is not None:
+                    if self._vision is None:
+                        from openjarvis.system import SystemBuilder
+
+                        self._vision = (
+                            SystemBuilder().agent("native_openhands").model("gemma3:4b").build()
+                        )
+                    result = self._vision.ask(question, voice=True, images=[image])
+                else:
+                    result = self._system.ask(question, voice=True)
                 item["content"] = result.get("content", "")
             except Exception as exc:
                 item["error"] = str(exc)
@@ -381,6 +391,21 @@ class _Jobs:
                 return out
 
 
+def _vision_caveat(content: str) -> str:
+    """Screen descriptions are right about the scene and unreliable on detail,
+    so the uncertainty is part of how they are spoken."""
+    c = (content or "").strip()
+    if not c or c.lower().startswith(
+        ("roughly", "it looks like", "i'm not certain", "based on a rough look")
+    ):
+        return c
+    for lead in ("sir, ", "Sir, "):
+        if c.startswith(lead):
+            c = c[len(lead):]
+            break
+    return "Based on a rough look, sir -- " + c[0].lower() + c[1:]
+
+
 def _short_question(q: str, words: int = 8) -> str:
     parts = " ".join(q.split()).strip(" .!?,").split()
     if len(parts) > words:
@@ -396,9 +421,16 @@ def _speak_finished_answers(console, voice_session, jobs) -> None:
         console.print(f"[dim]timing: model answer took {item['secs']:.0f}s[/dim]")
         if item.get("error"):
             console.print(f"[red]Error: {item['error']}[/red]")
-            text = "Sorry, sir, I couldn't answer that."
+            text = (
+                "I couldn't check the screen just now, sir. Please try again."
+                if item.get("vision")
+                else "Sorry, sir, I couldn't answer that."
+            )
         else:
-            body = _truncate_for_voice(_speech_clean(item.get("content", "")))
+            raw_content = item.get("content", "")
+            if item.get("vision"):
+                raw_content = _vision_caveat(raw_content)
+            body = _truncate_for_voice(_speech_clean(raw_content))
             if not body:
                 body = "I didn't come up with an answer, sir."
             text = body
@@ -701,14 +733,12 @@ def listen(wake_model: Optional[str]) -> None:
                         _shot = capture_screen_to_temp()
                         with open(_shot, "rb") as _f:
                             _img_b64 = _b64.b64encode(_f.read()).decode("ascii")
-                        if vision_system is None:
-                            console.print("[dim]Loading the screen-check system (first use)...[/dim]")
-                            vision_system = (
-                                SystemBuilder().agent("native_openhands").model("gemma3:4b").build()
-                            )
-                        result = vision_system.ask(text, voice=True, images=[_img_b64])
+                        jobs.start(text, image=_img_b64)
+                        result = {
+                            "content": "Checking the screen, sir. That takes a couple of minutes."
+                        }
                         _vc = result.get("content", "")
-                        if _vc and not _vc.lower().startswith(("roughly", "it looks like", "i'm not certain")):
+                        if _vc and not _vc.lower().startswith(("roughly", "it looks like", "i'm not certain", "checking the screen")):
                             # Strip a leading honorific/name so it reads naturally after the
                             # caveat instead of colliding with it (e.g. "...it looks like sir, the...").
                             _vc_stripped = _vc
