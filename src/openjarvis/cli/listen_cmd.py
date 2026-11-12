@@ -791,7 +791,7 @@ def listen(wake_model: Optional[str]) -> None:
                         jobs.start(text, image=_img_b64)
                         result = {"content": _screen_ack(_open_windows_sentence())}
                         _vc = result.get("content", "")
-                        if _vc and not _vc.lower().startswith(("roughly", "it looks like", "i'm not certain", "checking the screen")):
+                        if _vc and not _vc.lower().startswith(("roughly", "it looks like", "i'm not certain", "checking the screen", "open windows")):
                             # Strip a leading honorific/name so it reads naturally after the
                             # caveat instead of colliding with it (e.g. "...it looks like sir, the...").
                             _vc_stripped = _vc
