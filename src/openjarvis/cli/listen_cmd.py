@@ -408,6 +408,59 @@ def _vision_caveat(content: str) -> str:
     return "Based on a rough look, sir -- " + c[0].lower() + c[1:]
 
 
+_WINDOW_SKIP_EXES = {
+    "windowsterminal", "powershell", "pwsh", "cmd", "conhost", "openconsole",
+    "python", "pythonw", "textinputhost", "shellexperiencehost", "searchhost",
+    "startmenuexperiencehost", "lockapp",
+}
+
+
+def _open_windows_sentence() -> str:
+    """The windows Windows itself lists as open, front to back. Read from the OS,
+    so unlike the picture model it cannot invent anything. Skips the terminal
+    Jarvis runs in, shell hosts and minimized windows."""
+    labels = []
+    try:
+        from openjarvis.tools.close_application import _app_label
+        from openjarvis.tools.switch_to_application import _Win32
+
+        for w in _Win32().list_windows():
+            if w["iconic"] or w["exe"] in _WINDOW_SKIP_EXES:
+                continue
+            label = _app_label(w["title"]).strip()[:40]
+            if not label or label in labels:
+                continue
+            labels.append(label)
+            if len(labels) == 4:
+                break
+    except Exception:
+        return ""
+    if not labels:
+        return ""
+    names = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+    return _speech_clean(f"Open windows, front to back: {names}.")
+
+
+def _screen_ack(windows: str) -> str:
+    if windows:
+        return windows + " Checking the picture too, sir; that takes a couple of minutes."
+    return "Checking the screen, sir. That takes a couple of minutes."
+
+
+def _screen_guess(body: str) -> str:
+    """Label the picture model's text as a guess; the certain part is the window list."""
+    g = (body or "").strip()
+    for lead in ("sir, ", "Sir, "):
+        if g.startswith(lead):
+            g = g[len(lead):]
+            break
+    if not g:
+        return ""
+    if not (g.startswith("I ") or g.startswith("I'")):
+        g = g[0].lower() + g[1:]
+    return "The picture model guesses: " + g
+
+
 def _short_question(q: str, words: int = 8) -> str:
     parts = " ".join(q.split()).strip(" .!?,").split()
     if len(parts) > words:
@@ -424,15 +477,15 @@ def _speak_finished_answers(console, voice_session, jobs) -> None:
         if item.get("error"):
             console.print(f"[red]Error: {item['error']}[/red]")
             text = (
-                "I couldn't check the screen just now, sir. Please try again."
+                "I couldn't get the picture model's description, sir. You can ask again."
                 if item.get("vision")
                 else "Sorry, sir, I couldn't answer that."
             )
         else:
             raw_content = item.get("content", "")
-            if item.get("vision"):
-                raw_content = _vision_caveat(raw_content)
             body = _truncate_for_voice(_speech_clean(raw_content))
+            if item.get("vision") and body:
+                body = _screen_guess(body)
             if not body:
                 body = "I didn't come up with an answer, sir."
             text = body
@@ -736,9 +789,7 @@ def listen(wake_model: Optional[str]) -> None:
                         with open(_shot, "rb") as _f:
                             _img_b64 = _b64.b64encode(_f.read()).decode("ascii")
                         jobs.start(text, image=_img_b64)
-                        result = {
-                            "content": "Checking the screen, sir. That takes a couple of minutes."
-                        }
+                        result = {"content": _screen_ack(_open_windows_sentence())}
                         _vc = result.get("content", "")
                         if _vc and not _vc.lower().startswith(("roughly", "it looks like", "i'm not certain", "checking the screen")):
                             # Strip a leading honorific/name so it reads naturally after the
