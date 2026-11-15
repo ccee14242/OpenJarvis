@@ -427,8 +427,9 @@ def _open_windows_sentence() -> str:
         for w in _Win32().list_windows():
             if w["iconic"] or w["exe"] in _WINDOW_SKIP_EXES:
                 continue
-            label = _app_label(w["title"]).strip()[:40]
-            if not label or label in labels:
+            title = _re.sub(r"^\(\d+\+?\)\s*", "", w["title"])
+            label = _app_label(title).strip()[:40]
+            if not any(ch.isalpha() for ch in label) or label in labels:
                 continue
             labels.append(label)
             if len(labels) == 4:
