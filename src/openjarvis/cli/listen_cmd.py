@@ -442,6 +442,19 @@ def _open_windows_sentence() -> str:
     return _speech_clean(f"Open windows, front to back: {names}.")
 
 
+_GENERAL_SCREEN = _re.compile(
+    r"^\s*(?:(?:hey\s+)?jarvis[\s,]+)?(?:please[\s,]+)?(?:(?:what(?:'s|\s+is)|tell\s+me\s+what(?:'s|\s+is)?)\s+(?:on|in)\s+(?:my|the)\s+(?:screen|display)|what\s+(?:do|can)\s+you\s+see(?:\s+on\s+(?:my|the)\s+(?:screen|display))?|(?:describe|look\s+at)\s+(?:my|the)\s+screen)(?:\s+(?:right\s+)?now)?(?:\s+please)?[\s.!?,]*$",
+    _re.IGNORECASE,
+)
+
+
+def _is_general_screen_question(text: str) -> bool:
+    """A general 'what is on my screen' gets the OS window list only. The picture
+    model took 3-4 minutes and was wrong twice, so it is kept for specific
+    questions ('is there an error on my screen')."""
+    return bool(_GENERAL_SCREEN.match(text))
+
+
 def _screen_ack(windows: str) -> str:
     if windows:
         return windows + " Checking the picture too, sir; that takes a couple of minutes."
@@ -721,6 +734,7 @@ def listen(wake_model: Optional[str]) -> None:
     # Load the speech models now so the first spoken reply is not the slow
     # one (Kokoro's first synthesis took 25-75 s). The audio is discarded;
     # any failure is ignored and models then load lazily as before.
+    _ack_audio = []
     console.print("[dim]Warming up the voice (first start can take a minute)...[/dim]")
     try:
         voice_session.get_stt_backend()
@@ -730,7 +744,9 @@ def listen(wake_model: Optional[str]) -> None:
             _kw = {"output_format": "wav", "speed": _spd}
             if _vid:
                 _kw["voice_id"] = _vid
-            _tts.synthesize("Ready.", **_kw)
+            _res = _tts.synthesize("Yes, sir?", **_kw)
+            if getattr(_res, "audio", None):
+                _ack_audio.append((_res.audio, _res.sample_rate))
     except Exception as exc:
         console.print(f"[dim yellow]Voice warm-up skipped: {exc}[/dim yellow]")
     wake_phrase = (wake_model or config.speech.wakeword_model).replace("_", " ")
@@ -754,6 +770,15 @@ def listen(wake_model: Optional[str]) -> None:
                 continue
 
             console.print("\n[bold cyan]Wake word detected.[/bold cyan]")
+            import os as _os
+
+            if _ack_audio and not _os.environ.get("JARVIS_NO_ACK"):
+                try:
+                    from openjarvis.speech.voice_io import play_wav as _play
+
+                    _play(_ack_audio[0][0], sample_rate=_ack_audio[0][1])
+                except Exception:
+                    pass
             t_rec = time.perf_counter()
             text = record_voice(console, voice_session)
             console.print(f"[dim]timing: listen+transcribe {time.perf_counter() - t_rec:.1f}s[/dim]")
@@ -774,6 +799,11 @@ def listen(wake_model: Optional[str]) -> None:
                 )
                 if _routed is not None:
                     result = {"content": _routed}
+                elif is_screen_request and _is_general_screen_question(text):
+                    result = {
+                        "content": _open_windows_sentence()
+                        or "I don't see any open windows besides my own terminal, sir."
+                    }
                 elif is_screen_request and jobs.busy():
                     result = {
                         "content": (
